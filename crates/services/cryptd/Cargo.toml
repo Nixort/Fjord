@@ -1,0 +1,12 @@
+[package]
+name = "cryptd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fjord OS component: cryptd"
+
+[lints]
+workspace = true
+
+[dependencies]
