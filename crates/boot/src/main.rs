@@ -63,6 +63,8 @@ core::arch::global_asm!(
 /// Rust-side entry, called once by the assembly `_start` shim.
 #[no_mangle]
 extern "C" fn rust_entry() -> ! {
+    let _ = hull::serial::Serial::init();
+    hull::arch::init_boot_cpu();
     keel::kmain()
 }
 
