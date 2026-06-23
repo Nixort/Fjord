@@ -14,6 +14,7 @@ resolver = "2"
 members = [
   "crates/keel",        # microkernel (capabilities, IPC, memory, Tide scheduler)
   "crates/hull",        # hardware abstraction layer (HAL)
+  "crates/boot",        # freestanding kernel binary: _start shim -> keel::kmain
   "crates/anchor",      # secure boot + DICE measured-boot root of trust
   "crates/helm",        # root supervisor + Cask verifier (policy)
   "crates/cask",        # .cask executable container format (parse/seal/verify)
