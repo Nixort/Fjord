@@ -35,9 +35,16 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let mut args = env::args().skip(1);
-    let cmd = args.next().unwrap_or_else(|| "help".to_owned());
-    let rest: Vec<String> = args.collect();
+    let mut args = env::args().skip(1).collect::<Vec<_>>();
+
+    // Cargo aliases commonly insert a `--` separator before user arguments.
+    // `cargo shipwright -- build` therefore reaches us as [`--`, `build`].
+    if args.first().is_some_and(|arg| arg == "--") {
+        args.remove(0);
+    }
+
+    let cmd = args.first().cloned().unwrap_or_else(|| "help".to_owned());
+    let rest = if args.is_empty() { Vec::new() } else { args[1..].to_vec() };
 
     match cmd.as_str() {
         "build" => build_kernel(&rest),
