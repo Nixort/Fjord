@@ -19,3 +19,4 @@ description = "Fjord OS component: keel"
 workspace = true
 
 [dependencies]
+hull = { path = "../hull" }
