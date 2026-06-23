@@ -1,3 +1,12 @@
+# Copyright Nixort & Itan Winter <https://github.com/Nixort/Fjord> 2026.
+#
+# License: GNU General Public License v3
+# You can find the license file in the project root.
+#
+# Fjord OS — version 0.0.1
+# The code was written for Fjord.
+# 23 june 2026
+
 # Fjord is a bare-metal, no_std Rust OS. It pins a nightly toolchain because
 # build-std and several unstable features are required for kernel-space crates.
 [toolchain]
