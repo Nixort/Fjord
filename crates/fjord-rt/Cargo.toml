@@ -1,0 +1,12 @@
+[package]
+name = "fjord-rt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fjord OS component: fjord-rt"
+
+[lints]
+workspace = true
+
+[dependencies]
