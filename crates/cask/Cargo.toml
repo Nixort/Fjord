@@ -1,0 +1,12 @@
+[package]
+name = "cask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fjord OS component: cask"
+
+[lints]
+workspace = true
+
+[dependencies]
