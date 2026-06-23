@@ -9,5 +9,21 @@
 
 //! Per-architecture backends (CPU init, registers, context switch).
 //!
-//! TODO(hull): `#[cfg(target_arch = ...)]` modules for x86_64 and aarch64,
-//! each exposing the same trait-shaped API to the rest of Hull.
+//! Currently provides x86_64 CPU bring-up: a minimal GDT, TSS and IDT with
+//! handlers for CPU exceptions. aarch64 vector-table bring-up is tracked in
+//! ROADMAP Phase 1.
+
+#[cfg(target_arch = "x86_64")]
+pub mod x86_64;
+
+/// Initialise CPU-local descriptor tables for the current boot CPU.
+#[cfg(target_arch = "x86_64")]
+pub fn init_boot_cpu() {
+    // SAFETY: early boot is single-core here; descriptor tables are static and
+    // stay alive forever after being loaded into GDTR/IDTR/TR.
+    unsafe { x86_64::init_boot_cpu() }
+}
+
+/// Portable no-op until the aarch64 backend lands.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn init_boot_cpu() {}
