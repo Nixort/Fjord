@@ -1,0 +1,48 @@
+# Fjord OS — virtual workspace manifest.
+# See docs/ARCHITECTURE.md for how the crates map onto the system design.
+[workspace]
+resolver = "2"
+members = [
+  "crates/keel",        # microkernel (capabilities, IPC, memory, Tide scheduler)
+  "crates/hull",        # hardware abstraction layer (HAL)
+  "crates/anchor",      # secure boot + DICE measured-boot root of trust
+  "crates/helm",        # root supervisor + Cask verifier (policy)
+  "crates/cask",        # .cask executable container format (parse/seal/verify)
+  "crates/lading",      # signed bill-of-lading manifest
+  "crates/brine",       # full-disk / per-object authenticated encryption
+  "crates/harbormaster",# authentication + authorization (identity -> capability)
+  "crates/logbook",     # transparency-log client (append-only, inclusion proofs)
+  "crates/fjord-rt",    # async runtime for userspace services
+  "crates/libfjord",    # userspace syscall + capability bindings
+  "crates/services/cryptd",   # key custody + crypto operations service
+  "crates/services/storaged", # block + object storage service
+  "crates/services/vfs",      # virtual filesystem service
+  "crates/services/netd",     # userspace network stack service
+  "crates/services/timed",    # trusted time + monotonic counters service
+  "xtask/shipwright",   # host build orchestrator (PGO tiers, seals Cask)
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Nixort <nixort@proton.me>"]
+repository = "https://github.com/Nixort/Fjord"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_docs = "warn"
+rust_2018_idioms = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+# Reproducible, hardened release profile (see docs/ARCHITECTURE.md §Build).
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+overflow-checks = true
+strip = true

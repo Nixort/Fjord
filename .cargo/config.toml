@@ -1,0 +1,12 @@
+# Kernel-space crates target bare metal (no_std). Userspace host tooling
+# (xtask/shipwright) is built for the host triple explicitly via the alias.
+[build]
+target = "x86_64-unknown-none"
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]
+
+[alias]
+# `cargo shipwright -- build` runs the build orchestrator on the host.
+shipwright = "run -p shipwright --target x86_64-unknown-linux-gnu --"
