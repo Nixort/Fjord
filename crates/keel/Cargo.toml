@@ -1,0 +1,12 @@
+[package]
+name = "keel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fjord OS component: keel"
+
+[lints]
+workspace = true
+
+[dependencies]
