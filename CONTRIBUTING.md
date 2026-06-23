@@ -23,17 +23,6 @@ cargo shipwright -- test      # runs no_std tests under QEMU
 
 All of the above must pass before review. CI enforces them.
 
-## Patch series & history
-
-Fjord values a *readable history*. Prefer a clean series of focused commits
-over one large drop. Generate a shareable series with:
-
-```sh
-git format-patch origin/main      # one .patch file per commit
-```
-
-The initial skeleton itself was built as a patch series; see `patches/`.
-
 ## Code style
 
 - Document every public item (`missing_docs` is denied).
