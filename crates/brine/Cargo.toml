@@ -1,0 +1,12 @@
+[package]
+name = "brine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fjord OS component: brine"
+
+[lints]
+workspace = true
+
+[dependencies]
