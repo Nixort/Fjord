@@ -38,6 +38,10 @@ core::compile_error!(
 const STACK_SIZE: usize = 64 * 1024;
 
 /// 16-byte-aligned backing storage for the boot stack (SysV x86_64 ABI).
+///
+/// The field is referenced from `global_asm!` via the `BOOT_STACK` symbol,
+/// which Rust dead-code analysis cannot see.
+#[allow(dead_code)]
 #[repr(align(16))]
 struct BootStack([u8; STACK_SIZE]);
 
