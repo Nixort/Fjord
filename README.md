@@ -52,4 +52,4 @@ Kernel crates are `#![no_std]` and target `x86_64-unknown-none` /
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0 at your option.
+Licensed under the GNU General Public License v3.0 (see LICENSE).
