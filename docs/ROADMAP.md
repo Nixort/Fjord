@@ -15,14 +15,14 @@ and concrete task checklists. Confidence markers: 🟢 certain · 🟡 ~80% · �
 crate compiles as a stub for both targets.
 
 - [x] Virtual Cargo workspace + pinned nightly toolchain
-- [x] Dual MIT/Apache-2.0 licensing
+- [x] GPL-3.0-or-later licensing
 - [x] ARCHITECTURE + ROADMAP + CONTRIBUTING + SECURITY docs
 - [ ] `shipwright` host orchestrator: `build`, `check`, `fmt`, `clippy`, `qemu`
 - [ ] CI matrix (x86_64-unknown-none, aarch64-unknown-none) 🟡
 - [ ] Reproducible-build harness (SOURCE_DATE_EPOCH, locked deps) 🟡
 - [ ] `no_std` test harness running under QEMU
 
-## Phase 1 — Boot & Hull  (⬜)
+## Phase 1 — Boot & Hull  (🟡)
 
 **Goal.** Boot to a Rust `kmain` on real-ish hardware (QEMU virt) on both archs.
 
@@ -32,9 +32,11 @@ crate compiles as a stub for both targets.
 - [ ] `Hull`: physical memory map discovery, early frame allocator
 - [ ] `Hull`: MMU enable, higher-half kernel, W^X page attributes
 - [ ] `Hull`: timer + interrupt controller (APIC / GIC)
-- [ ] `Hull`: 16550 / PL011 UART serial driver
-- [ ] `bootloader` integration (UEFI) + handoff struct
-- [ ] Panic handler, backtrace, early `alloc` (bump -> buddy)
+- [x] `Hull`: 16550 UART serial driver (x86_64) + `kprintln!`; PL011 (aarch64) 🟡
+- [x] `boot` crate: freestanding `_start` + boot stack -> `keel::kmain`
+- [x] `keel::kmain` boot banner over the early serial console
+- [x] Panic handler over serial (backtrace + early `alloc` bump->buddy pending)
+- [ ] Loader handoff: `bootloader`/`limine` (UEFI), long-mode entry, memory map
 
 ## Phase 2 — Keel microkernel core  (⬜)
 
