@@ -28,7 +28,7 @@ crate compiles as a stub for both targets.
 
 **Exit criteria.** Serial "hello from Keel" on x86_64 + aarch64 under QEMU.
 
-- [ ] `Hull`: CPU bring-up, GDT/IDT (x86_64), exception vectors (aarch64)
+- [x] `Hull`: CPU bring-up, GDT/TSS/IDT + CPU exceptions (x86_64); aarch64 vectors 🟡
 - [ ] `Hull`: physical memory map discovery, early frame allocator
 - [ ] `Hull`: MMU enable, higher-half kernel, W^X page attributes
 - [ ] `Hull`: timer + interrupt controller (APIC / GIC)
