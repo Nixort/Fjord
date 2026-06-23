@@ -24,4 +24,7 @@ reviewable step by step rather than one big drop. Apply with:
 - 2026-06-23  feat(fjord-rt): async runtime skeleton
 - 2026-06-23  feat(libfjord): userspace capability bindings skeleton
 - 2026-06-23  build(shipwright): host build orchestrator skeleton
+- 2026-06-23  docs: add commit/patch history index
+- 2026-06-23  chore: relicense to GPL-3.0-or-later
+- 2026-06-23  chore: add copyright + license header to all source files
 
