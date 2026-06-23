@@ -42,4 +42,4 @@ The initial skeleton itself was built as a patch series; see `patches/`.
 
 ## Licensing of contributions
 
-By contributing you agree your work is dual-licensed under MIT OR Apache-2.0.
+By contributing you agree your work is licensed under GPL-3.0-or-later.
