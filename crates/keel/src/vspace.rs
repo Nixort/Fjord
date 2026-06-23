@@ -1,3 +1,12 @@
+// Copyright Nixort & Itan Winter <https://github.com/Nixort/Fjord> 2026.
+//
+// License: GNU General Public License v3
+// You can find the license file in the project root.
+//
+// Fjord OS — version 0.0.1
+// The code was written for Fjord.
+// 23 june 2026
+
 //! Virtual address spaces and page-table management.
 //!
 //! Enforces W^X (a page is never simultaneously writable and executable) and

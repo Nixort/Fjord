@@ -1,3 +1,12 @@
+// Copyright Nixort & Itan Winter <https://github.com/Nixort/Fjord> 2026.
+//
+// License: GNU General Public License v3
+// You can find the license file in the project root.
+//
+// Fjord OS — version 0.0.1
+// The code was written for Fjord.
+// 23 june 2026
+
 //! # Shipwright — host build orchestrator
 //!
 //! Runs on the developer host (not no_std). It drives the whole build: compile
