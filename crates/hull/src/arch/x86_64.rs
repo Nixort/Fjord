@@ -236,8 +236,12 @@ unsafe fn write_tss_descriptor(tss_base: u64) {
         | (((tss_limit >> 16) & 0xF) << 48)
         | (((tss_base >> 24) & 0xFF) << 56);
     let high = tss_base >> 32;
-    GDT[3] = low;
-    GDT[4] = high;
+
+    // SAFETY: early boot owns the mutable static GDT before SMP/interrupts.
+    unsafe {
+        GDT[3] = low;
+        GDT[4] = high;
+    }
 }
 
 unsafe fn fill_idt() {
@@ -252,7 +256,8 @@ unsafe fn fill_idt() {
         fjord_isr_28, fjord_isr_29, fjord_isr_30, fjord_isr_31,
     ];
     for (vector, handler) in handlers.iter().enumerate() {
-        IDT[vector].set_handler(*handler);
+        // SAFETY: early boot owns the mutable static IDT before SMP/interrupts.
+        unsafe { IDT[vector].set_handler(*handler) };
     }
 }
 
@@ -272,7 +277,7 @@ unsafe fn load_gdt() {
             "push rax",
             "retfq",
             "2:",
-            "mov ax, {data:x}",
+            "mov ax, {data}",
             "mov ds, ax",
             "mov es, ax",
             "mov ss, ax",
@@ -325,8 +330,6 @@ fn halt_forever() -> ! {
 }
 
 global_asm!(r#"
-.intel_syntax noprefix
-
 .macro ISR_NOERR vec name
 .global \name
 \name:
