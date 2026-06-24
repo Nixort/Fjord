@@ -263,7 +263,7 @@ pub fn selftest() -> Result<(), CdtError> {
     }
     cdt.get(a)?; // still live
     cdt.get(b)?; // still live
-    if cdt.get(c) != Err(CdtError::Empty) || cdt.get(d) != Err(CdtError::Empty) {
+    if !matches!(cdt.get(c), Err(CdtError::Empty)) || !matches!(cdt.get(d), Err(CdtError::Empty)) {
         return Err(CdtError::Empty);
     }
 
