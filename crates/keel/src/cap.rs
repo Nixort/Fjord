@@ -379,7 +379,7 @@ pub fn selftest() -> Result<(), CapError> {
 
     // Delete clears the slot and a double-delete is refused.
     cnode.delete(0)?;
-    if cnode.delete(0) != Err(CapError::SlotEmpty) {
+    if !matches!(cnode.delete(0), Err(CapError::SlotEmpty)) {
         return Err(CapError::SlotEmpty);
     }
 
