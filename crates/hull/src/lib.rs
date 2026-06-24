@@ -18,6 +18,7 @@
 pub mod arch;
 pub mod boot;
 pub mod mmu;
+pub mod paging;
 pub mod irq;
 pub mod timer;
 pub mod serial;
