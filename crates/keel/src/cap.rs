@@ -125,7 +125,7 @@ pub enum CapType {
 /// that they can only be obtained through kernel-mediated operations
 /// ([`CNode::insert`], [`CNode::copy`], [`CNode::mint`], retype, …), never
 /// fabricated by userspace.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Capability {
     cap_type: CapType,
     object: u64,
