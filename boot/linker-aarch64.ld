@@ -11,8 +11,9 @@
 /* Minimal kernel link script for the aarch64 `boot` binary on QEMU `virt`.
  *
  * QEMU's `virt` machine places RAM at 0x4000_0000. The image is linked at
- * 0x4008_0000 (the conventional 512 KiB kernel offset) and QEMU's `-kernel`
- * loader enters the ELF at `_start` directly, so no boot note is required.
+ * 0x4008_0000 (RAM base + the 0x80000 text_offset advertised in the arm64
+ * Image header). The ELF is objcopy'd to a flat binary whose Image header lets
+ * QEMU boot it via the Linux arm64 protocol and pass the DTB pointer in `x0`.
  *
  * Section boundaries are exported as 4 KiB-aligned symbols so a later MMU slice
  * can map each segment with exact W^X permissions. The boot stack lives in
@@ -67,6 +68,11 @@ SECTIONS {
        physical frames below this watermark. */
     . = ALIGN(4K);
     __kernel_end = .;
+
+    /* Total in-memory footprint for the arm64 Image header's `image_size`
+       field, so the bootloader reserves through `.bss` and never overlaps the
+       DTB it places immediately after the kernel. */
+    __image_size = __kernel_end - __text_start;
 
     /DISCARD/ : {
         *(.eh_frame)
