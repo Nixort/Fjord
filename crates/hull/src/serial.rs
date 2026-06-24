@@ -7,7 +7,7 @@
 // The code was written for Fjord.
 // 23 june 2026
 
-//! Early debug console: 16550 UART (x86_64 COM1) / PL011 (aarch64, TODO).
+//! Early debug console: 16550 UART (x86_64 COM1) / PL011 (aarch64, QEMU `virt`).
 //!
 //! This is the *earliest* output path in the system — it must work before the
 //! heap, before paging, and from inside the panic handler. It is therefore
@@ -90,14 +90,59 @@ mod imp {
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(target_arch = "aarch64")]
 mod imp {
-    //! Portable fallback. aarch64 PL011 support is tracked in ROADMAP Phase 1.
+    //! PL011 UART driver for the QEMU `virt` machine.
+    //!
+    //! The kernel runs with the MMU off during early bring-up, so every access
+    //! targets Device memory directly at its physical address. UART0 sits at
+    //! the fixed `0x0900_0000` block on `virt`.
+
+    use core::ptr::{read_volatile, write_volatile};
+
+    /// PL011 UART0 base address on the QEMU `virt` machine.
+    const UART0: usize = 0x0900_0000;
+
+    // PL011 register offsets from the block base.
+    const DR: usize = 0x00; // data register
+    const FR: usize = 0x18; // flag register
+    const CR: usize = 0x30; // control register
+
+    const FR_TXFF: u32 = 1 << 5; // transmit FIFO full
+    const CR_UARTEN: u32 = 1 << 0; // UART enable
+    const CR_TXE: u32 = 1 << 8; // transmit enable
+    const CR_RXE: u32 = 1 << 9; // receive enable
+
+    /// Enable the UART for transmit/receive. QEMU's model needs no baud-rate
+    /// programming, so this is deliberately minimal.
+    pub fn init() {
+        // SAFETY: UART0 is the fixed PL011 MMIO block on QEMU `virt`; with the
+        // MMU off the access reaches Device memory directly.
+        unsafe {
+            write_volatile((UART0 + CR) as *mut u32, CR_UARTEN | CR_TXE | CR_RXE);
+        }
+    }
+
+    /// Transmit one byte, blocking until the TX FIFO can accept it.
+    pub fn put(byte: u8) {
+        // SAFETY: see [`init`]; FR/DR are valid PL011 registers.
+        unsafe {
+            while read_volatile((UART0 + FR) as *const u32) & FR_TXFF != 0 {
+                core::hint::spin_loop();
+            }
+            write_volatile((UART0 + DR) as *mut u32, u32::from(byte));
+        }
+    }
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+mod imp {
+    //! Portable no-op fallback for architectures without an early console yet.
 
     /// No-op until a real driver exists for this architecture.
     pub fn init() {}
 
-    /// TODO(hull): drive the PL011 UART on aarch64 (QEMU `virt` @ 0x0900_0000).
+    /// No-op until a real driver exists for this architecture.
     pub fn put(_byte: u8) {}
 }
 
