@@ -9,20 +9,16 @@
 
 //! # Fjord kernel binary (boot shim)
 //!
-//! The freestanding ELF that a bootloader loads and jumps into. Its whole job
-//! is to provide the real `_start` symbol, establish a stack, install a panic
-//! handler wired to the early serial console, and transfer control to
-//! [`keel::kmain`].
+//! The freestanding ELF that a Multiboot1 loader (or `qemu -kernel`) loads and
+//! jumps into. The assembly shim in `boot.s` provides `_start`, switches the
+//! CPU into 64-bit long mode with an identity-mapped low 1 GiB, then calls
+//! [`rust_entry`], which hands off to [`keel::kmain`].
 //!
-//! Build (nightly + `rust-src`):
+//! Build / boot (nightly + `rust-src`):
 //! ```sh
-//! cargo build -p boot --target boot/x86_64-fjord.json
+//! cargo shipwright -- build
+//! cargo shipwright -- qemu
 //! ```
-//!
-//! NOTE: loader handoff (limine / UEFI `bootloader` crate, long-mode entry,
-//! memory map) is the next sub-step — see `boot/README.md` and ROADMAP Phase 1.
-//! Until that lands, `_start` assumes it is entered in 64-bit long mode by an
-//! external loader.
 #![no_std]
 #![no_main]
 
@@ -30,43 +26,19 @@ use core::panic::PanicInfo;
 
 #[cfg(not(target_arch = "x86_64"))]
 core::compile_error!(
-    "the boot shim currently provides `_start` only for x86_64 \
-     (aarch64 entry is tracked in ROADMAP Phase 1)"
+    "the boot shim currently targets x86_64 only (aarch64 is ROADMAP Phase 1)"
 );
-
-/// Size of the statically reserved boot stack (64 KiB).
-const STACK_SIZE: usize = 64 * 1024;
-
-/// 16-byte-aligned backing storage for the boot stack (SysV x86_64 ABI).
-///
-/// The field is referenced from `global_asm!` via the `BOOT_STACK` symbol,
-/// which Rust dead-code analysis cannot see.
-#[allow(dead_code)]
-#[repr(align(16))]
-struct BootStack([u8; STACK_SIZE]);
-
-static mut BOOT_STACK: BootStack = BootStack([0; STACK_SIZE]);
 
 #[cfg(target_arch = "x86_64")]
-core::arch::global_asm!(
-    ".section .text._start",
-    ".global _start",
-    "_start:",
-    "    lea rsp, [rip + {stack}]",  // base of the boot stack
-    "    add rsp, {size}",            // move to the top (stack grows down)
-    "    and rsp, -16",               // honour 16-byte ABI alignment
-    "    xor rbp, rbp",               // terminate stack-unwind backtraces
-    "    call {entry}",
-    "2:  hlt",                          // `entry` is `!`; guard just in case
-    "    jmp 2b",
-    stack = sym BOOT_STACK,
-    size = const STACK_SIZE,
-    entry = sym rust_entry,
-);
+core::arch::global_asm!(include_str!("boot.s"));
 
-/// Rust-side entry, called once by the assembly `_start` shim.
+/// Rust entry point, called by the assembly boot shim once long mode is active.
+///
+/// `multiboot_info` is the physical address of the Multiboot information
+/// structure the bootloader passed in `ebx`. It is preserved but not consumed
+/// yet; memory-map parsing arrives with the frame allocator in ROADMAP Phase 1.
 #[no_mangle]
-extern "C" fn rust_entry() -> ! {
+extern "C" fn rust_entry(_multiboot_info: u64) -> ! {
     let _ = hull::serial::Serial::init();
     hull::arch::init_boot_cpu();
     keel::kmain()

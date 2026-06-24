@@ -10,14 +10,19 @@
 
 /* Minimal kernel link script for the x86_64 `boot` binary.
  *
- * The image is linked at the conventional 1 MiB mark. The real higher-half
- * mapping and a proper memory layout arrive with the MMU work in Phase 1;
- * this is just enough to produce a coherent ELF with a known entry point. */
+ * The image is linked at the conventional 1 MiB mark. The Multiboot1 header
+ * must live within the first 8 KiB of the file, so the `.boot` section is
+ * placed first and KEPT (it is only referenced by the loader, never by Rust).
+ * The real higher-half mapping arrives with the MMU work later in Phase 1. */
 
 ENTRY(_start)
 
 SECTIONS {
     . = 1M;
+
+    .boot : ALIGN(8) {
+        KEEP(*(.multiboot))
+    }
 
     .text : ALIGN(4K) {
         *(.text._start)
