@@ -15,8 +15,9 @@
  * in a loadable segment, so it is placed first and assigned to both the `text`
  * load segment and the `note` segment.
  *
- * The image is linked at the conventional 1 MiB mark. The real higher-half
- * mapping arrives with the MMU work later in Phase 1. */
+ * The image is linked at the conventional 1 MiB mark. Section boundaries are
+ * exported as 4 KiB-aligned symbols so `hull::paging` can map each segment
+ * with exact W^X permissions. The real higher-half mapping arrives later. */
 
 ENTRY(_start)
 
@@ -29,6 +30,8 @@ PHDRS {
 
 SECTIONS {
     . = 1M;
+    . = ALIGN(4K);
+    __text_start = .;
 
     .note.Xen : ALIGN(4) {
         KEEP(*(.note.Xen))
@@ -40,11 +43,15 @@ SECTIONS {
     } :text
 
     . = ALIGN(4K);
+    __text_end = .;
+    __rodata_start = .;
     .rodata : {
         *(.rodata .rodata.*)
     } :rodata
 
     . = ALIGN(4K);
+    __rodata_end = .;
+    __data_start = .;
     .data : {
         *(.data .data.*)
     } :data
@@ -55,7 +62,8 @@ SECTIONS {
     } :data
 
     /* End of the loaded kernel image; the early frame allocator never hands
-       out physical frames below this watermark. */
+       out physical frames below this watermark, and paging maps the whole
+       [__text_start, __kernel_end) range with per-section permissions. */
     . = ALIGN(4K);
     __kernel_end = .;
 
