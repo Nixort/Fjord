@@ -12,8 +12,8 @@
 //! The freestanding ELF that a PVH-aware loader (`qemu -kernel`, Xen,
 //! cloud-hypervisor) loads and jumps into. The assembly shim in `boot.s`
 //! provides `_start`, switches the CPU into 64-bit long mode with an
-//! identity-mapped low 1 GiB, then calls [`rust_entry`], which hands off to
-//! [`keel::kmain`].
+//! identity-mapped low 1 GiB, then calls [`rust_entry`], which parses the PVH
+//! memory map and hands off to [`keel::kmain`].
 //!
 //! Build / boot (nightly + `rust-src`):
 //! ```sh
@@ -36,13 +36,18 @@ core::arch::global_asm!(include_str!("boot.s"));
 /// Rust entry point, called by the assembly boot shim once long mode is active.
 ///
 /// `pvh_start_info` is the physical address of the PVH `hvm_start_info`
-/// structure the loader passed in `ebx`. It is preserved but not consumed yet;
-/// memory-map parsing arrives with the frame allocator in ROADMAP Phase 1.
+/// structure the loader passed in `ebx`. We parse it into a memory map and
+/// hand the result to the kernel.
 #[no_mangle]
-extern "C" fn rust_entry(_pvh_start_info: u64) -> ! {
+extern "C" fn rust_entry(pvh_start_info: u64) -> ! {
     let _ = hull::serial::Serial::init();
     hull::arch::init_boot_cpu();
-    keel::kmain()
+
+    // SAFETY: the loader passes a valid `hvm_start_info` physical address in
+    // `ebx` (or 0); `parse_pvh` validates the magic before trusting it.
+    let boot_info = unsafe { hull::boot::parse_pvh(pvh_start_info) };
+
+    keel::kmain(&boot_info)
 }
 
 /// Last-resort panic handler: report over the early serial console, then halt.
