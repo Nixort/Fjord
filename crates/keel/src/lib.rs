@@ -84,6 +84,14 @@ pub fn kmain(boot: &BootInfo) -> ! {
     // Phase 1 slice and keep running on the bootstrap mapping.
     activate_address_space(&mut frames);
 
+    // Capability-space core smoke test (Phase 2 groundwork): prove mint/copy/
+    // move/delete bookkeeping and monotonic rights reduction before any real
+    // CSpace is retyped from untyped memory.
+    match cap::selftest() {
+        Ok(()) => hull::kprintln!("keel: cspace self-test -> mint/copy/move/delete OK"),
+        Err(e) => hull::kprintln!("keel: WARNING cspace self-test failed: {e:?}"),
+    }
+
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then
