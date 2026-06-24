@@ -114,25 +114,40 @@ fn activate_address_space(frames: &mut FrameAllocator) {
     }
 }
 
-/// Portable fallback: keep running on the bootstrap mapping until this
-/// architecture grows an MMU + interrupt controller (aarch64: GIC + the ARM
-/// generic timer, tracked in ROADMAP Phase 1).
-#[cfg(not(target_arch = "x86_64"))]
+/// Arm the aarch64 platform timer (GIC v2 + the ARM generic timer).
+///
+/// The aarch64 MMU (per-section W^X paging) is still a later Phase 1 slice, so
+/// we keep running on the bootstrap flat map; but the interrupt controller and
+/// generic timer come up now so the scheduler gains a tick source, mirroring
+/// the x86_64 local-APIC timer.
+#[cfg(target_arch = "aarch64")]
 fn activate_address_space(_frames: &mut FrameAllocator) {
-    hull::kprintln!(
-        "keel: MMU + timer bring-up deferred (aarch64 GIC/generic-timer is ROADMAP Phase 1)"
-    );
+    if hull::gic::init_timer() {
+        hull::kprintln!("keel: GIC v2 + generic timer armed (PPI 30); MMU W^X deferred");
+    } else {
+        hull::kprintln!("keel: WARNING generic timer unavailable (CNTFRQ_EL0 = 0)");
+    }
+}
+
+/// Portable fallback for architectures without an MMU/timer backend yet.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn activate_address_space(_frames: &mut FrameAllocator) {
+    hull::kprintln!("keel: MMU + timer bring-up deferred (no backend for this arch)");
 }
 
 /// Park the CPU, waking only to service interrupts (e.g. the periodic timer).
 fn idle() -> ! {
     loop {
-        // SAFETY: `hlt` halts until the next interrupt; portable targets spin.
+        // SAFETY: `hlt`/`wfi` halt until the next interrupt; other targets spin.
         #[cfg(target_arch = "x86_64")]
         unsafe {
             core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
         }
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         core::hint::spin_loop();
     }
 }

@@ -64,6 +64,12 @@ _entry:
     mrs     x0, hcr_el2
     orr     x0, x0, #(1 << 31)      // HCR_EL2.RW = 1 (EL1 is AArch64)
     msr     hcr_el2, x0
+
+    // Let EL1 drive the physical counter/timer without trapping to EL2.
+    mov     x0, #0x3                // CNTHCTL_EL2.EL1PCTEN | EL1PCEN
+    msr     cnthctl_el2, x0
+    msr     cntvoff_el2, xzr        // identity virtual-counter offset
+
     mov     x0, #0x3c5              // SPSR: EL1h, DAIF masked
     msr     spsr_el2, x0
     adr     x0, el1_entry
@@ -125,7 +131,7 @@ __vectors:
     .balign 0x80
     b       exc_halt            // Current EL, SPx:  Synchronous
     .balign 0x80
-    b       exc_halt            // Current EL, SPx:  IRQ
+    b       el1_irq             // Current EL, SPx:  IRQ -> GIC dispatcher
     .balign 0x80
     b       exc_halt            // Current EL, SPx:  FIQ
     .balign 0x80
