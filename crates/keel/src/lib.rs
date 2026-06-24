@@ -113,6 +113,11 @@ pub fn kmain(boot: &BootInfo) -> ! {
         Err(e) => hull::kprintln!("keel: WARNING ipc self-test failed: {e:?}"),
     }
 
+    match tide::selftest() {
+        Ok(()) => hull::kprintln!("keel: tide self-test -> priority/budget/block OK"),
+        Err(e) => hull::kprintln!("keel: WARNING tide self-test failed: {e:?}"),
+    }
+
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then
