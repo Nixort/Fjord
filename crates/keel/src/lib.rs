@@ -19,6 +19,8 @@
 #![no_std]
 #![allow(dead_code)]
 
+use hull::boot::BootInfo;
+use hull::mmu::{FrameAllocator, FRAME_SIZE};
 
 pub mod cap;
 pub mod vspace;
@@ -38,11 +40,13 @@ pub const ARCH: &str = "unknown";
 
 /// Kernel entry point, invoked by the `boot` shim once a stack exists.
 ///
-/// Brings up the early serial console and prints a boot banner so we have a
-/// visible sign of life. The real boot sequence (root CSpace, untyped hand-off
-/// to `Helm`, first userspace task) lands in ROADMAP Phase 2; until then we
-/// park the CPU in a low-power idle loop. Must never return.
-pub fn kmain() -> ! {
+/// Brings up the early serial console, prints a boot banner, logs the physical
+/// memory map handed over by the loader, and stands up the early physical
+/// frame allocator so later bring-up has a source of backing memory. The real
+/// boot sequence (root CSpace, untyped hand-off to `Helm`, first userspace
+/// task) lands in ROADMAP Phase 2; until then we park the CPU in a low-power
+/// idle loop. Must never return.
+pub fn kmain(boot: &BootInfo) -> ! {
     let _serial = hull::serial::Serial::init();
 
     hull::kprintln!();
@@ -52,6 +56,27 @@ pub fn kmain() -> ! {
         "  profile : {}",
         if cfg!(debug_assertions) { "debug" } else { "release" }
     );
+
+    // Physical memory: log the map, then bring up the early frame allocator.
+    boot.log();
+    let mut frames = FrameAllocator::new(boot);
+    let capacity = frames.capacity_frames();
+    let usable_mib = capacity.saturating_mul(FRAME_SIZE) / (1024 * 1024);
+    hull::kprintln!(
+        "keel: frame allocator online — {} free frames (~{} MiB) above {:#x}",
+        capacity,
+        usable_mib,
+        frames.floor()
+    );
+
+    // Smoke-test: pull a few frames to prove the allocator hands out distinct,
+    // page-aligned physical addresses.
+    if let (Some(a), Some(b), Some(c)) = (frames.alloc(), frames.alloc(), frames.alloc()) {
+        hull::kprintln!("keel: frame self-test -> {a:#x} {b:#x} {c:#x}");
+    } else if capacity > 0 {
+        hull::kprintln!("keel: WARNING frame self-test failed despite reported capacity");
+    }
+
     hull::kprintln!("keel: early console up; halting (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then
