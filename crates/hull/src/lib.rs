@@ -22,6 +22,8 @@ pub mod paging;
 pub mod irq;
 pub mod timer;
 pub mod serial;
+#[cfg(target_arch = "x86_64")]
+pub mod apic;
 
 /// Earliest platform bring-up: called before Keel.
 ///

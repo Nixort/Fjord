@@ -306,6 +306,20 @@ unsafe fn load_idt() {
     unsafe { asm!("lidt [{idt}]", idt = in(reg) &pointer, options(readonly, nostack, preserves_flags)); }
 }
 
+/// Install or replace an interrupt gate at `vector` after the IDT is loaded.
+///
+/// Used by the APIC bring-up to register hardware-IRQ entry stubs (timer,
+/// spurious) on top of the CPU-exception gates installed at boot.
+///
+/// # Safety
+/// Must run with interrupts disabled (e.g. before the first `sti`) so the IDT
+/// is never observed mid-update, and `handler` must be a valid ISR entry stub
+/// that follows the matching push/`iretq` convention.
+pub unsafe fn set_irq_gate(vector: u8, handler: unsafe extern "C" fn()) {
+    // SAFETY: single-core early boot owns the static IDT before interrupts.
+    unsafe { IDT[vector as usize].set_handler(handler); }
+}
+
 /// Rust exception entry point called by the assembly common stub.
 #[no_mangle]
 extern "C" fn fjord_exception_entry(frame: &ExceptionFrame) -> ! {
