@@ -30,7 +30,8 @@ crate compiles as a stub for both targets.
 
 - [x] `Hull`: CPU bring-up, GDT/TSS/IDT + CPU exceptions (x86_64); aarch64 vectors 🟡
 - [x] `Hull`: physical memory map discovery (PVH `hvm_start_info`), early bump frame allocator
-- [ ] `Hull`: MMU enable, higher-half kernel, W^X page attributes
+- [x] `Hull`: MMU enable, per-section W^X page attributes (4 KiB kernel image + 2 MiB identity)
+- [ ] `Hull`: higher-half kernel relocation
 - [ ] `Hull`: timer + interrupt controller (APIC / GIC)
 - [x] `Hull`: 16550 UART serial driver (x86_64) + `kprintln!`; PL011 (aarch64) 🟡
 - [x] `boot` crate: freestanding `_start` + boot stack -> `keel::kmain`
