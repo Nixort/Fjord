@@ -77,6 +77,18 @@ pub fn kmain(boot: &BootInfo) -> ! {
         hull::kprintln!("keel: WARNING frame self-test failed despite reported capacity");
     }
 
+    // Replace the throwaway bootstrap identity map with a Hull-built kernel
+    // address space that enforces per-section W^X, then prove we survived the
+    // CR3 switch by continuing to run and log from it.
+    match hull::paging::init_kernel_address_space(&mut frames) {
+        Some(root) => hull::kprintln!(
+            "keel: kernel address space active — per-section W^X, CR3={root:#x}"
+        ),
+        None => hull::kprintln!(
+            "keel: WARNING could not build kernel address space; on bootstrap tables"
+        ),
+    }
+
     hull::kprintln!("keel: early console up; halting (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then
