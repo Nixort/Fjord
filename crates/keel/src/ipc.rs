@@ -375,7 +375,7 @@ pub fn selftest() -> Result<(), IpcError> {
     // --- Endpoint: receiver-first then sender-first rendezvous. ---
     let mut storage = [Waiter::default(); 4];
     let mut ep = Endpoint::new(&mut storage);
-    let msg = Message::new(0xBADGE, 0x10, &[1, 2, 3]);
+    let msg = Message::new(0xBADC_0DE, 0x10, &[1, 2, 3]);
 
     // Receiver blocks (no sender yet).
     if ep.recv(7)? != IpcResult::Queued || ep.waiting() != 1 {
@@ -396,7 +396,7 @@ pub fn selftest() -> Result<(), IpcError> {
     }
     match ep.recv(13)? {
         IpcResult::Delivered { peer, msg: got }
-            if peer == 11 && got.word(2) == Some(3) && got.badge() == 0xBADGE => {}
+            if peer == 11 && got.word(2) == Some(3) && got.badge() == 0xBADC_0DE => {}
         _ => return Err(IpcError::QueueFull),
     }
     if ep.waiting() != 0 {
