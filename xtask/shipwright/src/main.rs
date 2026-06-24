@@ -11,7 +11,7 @@
 //!
 //! Runs on the developer host (not `no_std`). It drives Fjord developer tasks:
 //! building the freestanding kernel ELF, checking host/bare-metal crates, and
-//! eventually booting the image in QEMU and sealing `.cask` artifacts.
+//! booting the image in QEMU. Cask sealing arrives in later phases.
 //!
 //! This is the entry point behind `cargo shipwright -- <command>`.
 
@@ -22,7 +22,9 @@ use std::process::{Command, ExitCode, Stdio};
 
 const TOOLCHAIN: &str = "+nightly-2026-06-01";
 const TARGET_SPEC: &str = "boot/x86_64-fjord.json";
+const TARGET_TRIPLE: &str = "x86_64-fjord";
 const KERNEL_PACKAGE: &str = "boot";
+const KERNEL_BIN: &str = "fjord-kernel";
 
 fn main() -> ExitCode {
     match run() {
@@ -70,7 +72,7 @@ fn print_help() {
     eprintln!("implemented now:");
     eprintln!("  build    build the x86_64 freestanding kernel ELF");
     eprintln!("  check    type-check the x86_64 freestanding kernel ELF");
-    eprintln!("  qemu     build the ELF and report loader/QEMU readiness");
+    eprintln!("  qemu     build the ELF and boot it in qemu-system-x86_64 (serial on stdio)");
 }
 
 fn build_kernel(args: &[String]) -> Result<(), String> {
@@ -97,20 +99,32 @@ fn qemu(args: &[String]) -> Result<(), String> {
     cargo_kernel_command(&root, "build", &profile)?.run()?;
 
     let kernel = kernel_path(&root, &profile);
-    println!("Shipwright: kernel ELF built at {}", kernel.display());
-
-    if command_exists("qemu-system-x86_64") {
-        println!("Shipwright: qemu-system-x86_64 found");
-    } else {
-        println!("Shipwright: qemu-system-x86_64 not found in PATH");
+    if !kernel.is_file() {
+        return Err(format!("kernel ELF not found at {}", kernel.display()));
+    }
+    if !command_exists("qemu-system-x86_64") {
+        return Err("qemu-system-x86_64 not found in PATH".to_owned());
     }
 
-    Err(
-        "QEMU boot is intentionally blocked: Fjord has a freestanding ELF, \
-         but no loader handoff yet. Next ROADMAP step: wire Limine/bootloader \
-         so Shipwright can create a bootable image and run QEMU serial output."
-            .to_owned(),
-    )
+    println!("Shipwright: booting {} in QEMU", kernel.display());
+    println!("Shipwright: serial routed to stdio; press Ctrl-C to stop");
+
+    let mut command = Command::new("qemu-system-x86_64");
+    command
+        .current_dir(&root)
+        .arg("-kernel")
+        .arg(&kernel)
+        .arg("-serial")
+        .arg("stdio")
+        .arg("-display")
+        .arg("none")
+        .arg("-no-reboot")
+        .arg("-D")
+        .arg("target/qemu-fjord.log")
+        .arg("-d")
+        .arg("guest_errors");
+
+    Runner { command }.run()
 }
 
 fn profile_from_args(args: &[String]) -> Result<String, String> {
@@ -166,9 +180,9 @@ fn cargo_kernel_command(root: &Path, verb: &str, profile: &str) -> Result<Runner
 fn kernel_path(root: &Path, profile: &str) -> PathBuf {
     let cargo_profile_dir = if profile == "release" { "release" } else { "debug" };
     root.join("target")
-        .join("x86_64-fjord")
+        .join(TARGET_TRIPLE)
         .join(cargo_profile_dir)
-        .join("fjord-kernel")
+        .join(KERNEL_BIN)
 }
 
 fn command_exists(name: &str) -> bool {
@@ -209,7 +223,7 @@ impl Runner {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .status()
-            .map_err(|err| format!("failed to spawn cargo: {err}"))?;
+            .map_err(|err| format!("failed to spawn `{}`: {err}", render_program(&self.command)))?;
 
         if status.success() {
             Ok(())
@@ -219,8 +233,12 @@ impl Runner {
     }
 }
 
+fn render_program(command: &Command) -> String {
+    command.get_program().to_string_lossy().into_owned()
+}
+
 fn render_command(command: &Command) -> String {
-    let mut parts = vec![command.get_program().to_string_lossy().into_owned()];
+    let mut parts = vec![render_program(command)];
     parts.extend(command.get_args().map(render_arg));
     parts.join(" ")
 }
