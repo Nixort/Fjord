@@ -36,7 +36,7 @@ crate compiles as a stub for both targets.
 - [x] `boot` crate: freestanding `_start` + boot stack -> `keel::kmain`
 - [x] `keel::kmain` boot banner over the early serial console
 - [x] Panic handler over serial (backtrace + early `alloc` bump->buddy pending)
-- [ ] Loader handoff: `bootloader`/`limine` (UEFI), long-mode entry, memory map
+- [x] Loader handoff: Multiboot1 + 32→64-bit long-mode trampoline; boots under `qemu -kernel` (UEFI/`limine` + memory map later) 🟡
 
 ## Phase 2 — Keel microkernel core  (⬜)
 
