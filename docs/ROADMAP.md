@@ -29,7 +29,7 @@ crate compiles as a stub for both targets.
 **Exit criteria.** Serial "hello from Keel" on x86_64 + aarch64 under QEMU.
 
 - [x] `Hull`: CPU bring-up, GDT/TSS/IDT + CPU exceptions (x86_64); aarch64 EL1 vector table (minimal halt) 🟡
-- [x] `Hull`: physical memory map discovery (PVH `hvm_start_info`), early bump frame allocator
+- [x] `Hull`: physical memory map discovery (PVH `hvm_start_info` on x86_64, flattened device tree `/memory` on aarch64), early bump frame allocator
 - [x] `Hull`: MMU enable, per-section W^X page attributes (4 KiB kernel image + 2 MiB identity)
 - [ ] `Hull`: higher-half kernel relocation
 - [x] `Hull`: x86_64 local APIC + periodic timer interrupt (IDT gate → ISR → EOI → iretq)

@@ -58,17 +58,18 @@ extern "C" fn rust_entry(pvh_start_info: u64) -> ! {
 /// Rust entry point on aarch64, called by the assembly boot shim from EL1.
 ///
 /// QEMU `virt` passes the physical address of the flattened device tree in
-/// `x0`. Parsing the DTB for the real memory map is a later Phase 1 task; for
-/// now we boot with an empty map so Keel can bring up the PL011 console and
-/// park.
+/// `x0`. We parse it into the physical memory map and hand the result to the
+/// kernel, mirroring the PVH path on x86_64.
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
-extern "C" fn rust_entry(_dtb_paddr: u64) -> ! {
+extern "C" fn rust_entry(dtb_paddr: u64) -> ! {
     let _ = hull::serial::Serial::init();
     hull::arch::init_boot_cpu();
 
-    // TODO(boot): parse the flattened device tree at `_dtb_paddr`.
-    let boot_info = hull::boot::BootInfo::none();
+    // SAFETY: QEMU `virt` passes the physical address of a flattened device
+    // tree in `x0` (or 0); `parse_dtb` validates the FDT magic before trusting
+    // any field, and the MMU-off identity map makes the DTB directly readable.
+    let boot_info = unsafe { hull::boot::parse_dtb(dtb_paddr) };
 
     keel::kmain(&boot_info)
 }
