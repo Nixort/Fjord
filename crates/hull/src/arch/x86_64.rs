@@ -60,10 +60,18 @@ impl IdtEntry {
     }
 
     fn set_handler(&mut self, handler: unsafe extern "C" fn()) {
+        self.set_handler_ist(handler, 0);
+    }
+
+    /// Like [`set_handler`], but vectors through Interrupt Stack Table slot
+    /// `ist_index` (1..=7), so the CPU unconditionally switches to a known-good
+    /// stack before entering the gate. `ist_index == 0` keeps the interrupted
+    /// stack. The index occupies bits 0..=2 of the gate options byte.
+    fn set_handler_ist(&mut self, handler: unsafe extern "C" fn(), ist_index: u8) {
         let addr = handler as usize as u64;
         self.offset_low = addr as u16;
         self.selector = KERNEL_CODE_SELECTOR;
-        self.options = IDT_FLAGS;
+        self.options = IDT_FLAGS | (ist_index as u16 & 0x7);
         self.offset_mid = (addr >> 16) as u16;
         self.offset_high = (addr >> 32) as u32;
         self.reserved = 0;
@@ -259,6 +267,15 @@ unsafe fn fill_idt() {
         // SAFETY: early boot owns the mutable static IDT before SMP/interrupts.
         unsafe { IDT[vector].set_handler(*handler) };
     }
+
+    // #DF (vector 8) must land on its own IST stack. A kernel-stack overflow
+    // raises a fault whose handler would re-push onto the same exhausted stack
+    // and immediately re-fault, escalating to a triple fault (CPU reset). IST1
+    // resolves to TSS.ist[0], primed with DOUBLE_FAULT_STACK in init_boot_cpu.
+    const VECTOR_DOUBLE_FAULT: usize = 8;
+    const IST_DOUBLE_FAULT: u8 = 1;
+    // SAFETY: early boot owns the mutable static IDT before SMP/interrupts.
+    unsafe { IDT[VECTOR_DOUBLE_FAULT].set_handler_ist(fjord_isr_08, IST_DOUBLE_FAULT) };
 }
 
 unsafe fn load_gdt() {
