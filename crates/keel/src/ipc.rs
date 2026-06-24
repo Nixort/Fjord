@@ -133,9 +133,10 @@ impl Notification {
     }
 }
 
-/// One blocked party in an endpoint queue.
+/// One blocked party in an endpoint queue. Callers allocate the endpoint's
+/// wait-queue storage as `[Waiter::default(); N]`; the fields are private.
 #[derive(Clone, Copy, Debug, Default)]
-struct Waiter {
+pub struct Waiter {
     thread: u64,
     msg: Message,
 }
