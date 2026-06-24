@@ -25,19 +25,24 @@
 
 use core::panic::PanicInfo;
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 core::compile_error!(
-    "the boot shim currently targets x86_64 only (aarch64 is ROADMAP Phase 1)"
+    "the boot shim supports x86_64 (PVH) and aarch64 (QEMU virt) only"
 );
 
 #[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(include_str!("boot.s"));
 
-/// Rust entry point, called by the assembly boot shim once long mode is active.
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(include_str!("boot-aarch64.s"));
+
+/// Rust entry point on x86_64, called by the assembly boot shim once long mode
+/// is active.
 ///
 /// `pvh_start_info` is the physical address of the PVH `hvm_start_info`
 /// structure the loader passed in `ebx`. We parse it into a memory map and
 /// hand the result to the kernel.
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 extern "C" fn rust_entry(pvh_start_info: u64) -> ! {
     let _ = hull::serial::Serial::init();
@@ -46,6 +51,24 @@ extern "C" fn rust_entry(pvh_start_info: u64) -> ! {
     // SAFETY: the loader passes a valid `hvm_start_info` physical address in
     // `ebx` (or 0); `parse_pvh` validates the magic before trusting it.
     let boot_info = unsafe { hull::boot::parse_pvh(pvh_start_info) };
+
+    keel::kmain(&boot_info)
+}
+
+/// Rust entry point on aarch64, called by the assembly boot shim from EL1.
+///
+/// QEMU `virt` passes the physical address of the flattened device tree in
+/// `x0`. Parsing the DTB for the real memory map is a later Phase 1 task; for
+/// now we boot with an empty map so Keel can bring up the PL011 console and
+/// park.
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+extern "C" fn rust_entry(_dtb_paddr: u64) -> ! {
+    let _ = hull::serial::Serial::init();
+    hull::arch::init_boot_cpu();
+
+    // TODO(boot): parse the flattened device tree at `_dtb_paddr`.
+    let boot_info = hull::boot::BootInfo::none();
 
     keel::kmain(&boot_info)
 }
