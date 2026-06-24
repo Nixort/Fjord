@@ -9,23 +9,36 @@
 
 // Fjord boot shim.
 //
-// A Multiboot1-compliant bootloader (or `qemu-system-x86_64 -kernel`) loads
-// this ELF and enters `_start` in 32-bit protected mode with paging off. The
-// shim builds an identity-mapped page hierarchy for the low 1 GiB, switches
-// the CPU into 64-bit long mode, then calls the Rust entry `rust_entry`.
+// The image boots via the PVH boot protocol: an ELF note advertises a 32-bit
+// protected-mode entry point, so `qemu-system-x86_64 -kernel` (and Xen /
+// cloud-hypervisor) can load this 64-bit ELF directly and jump into `_start`
+// in 32-bit protected mode with paging off. QEMU's built-in multiboot path is
+// deliberately avoided because it only accepts 32-bit ELF images.
 //
-// This toolchain assembles `global_asm!` in Intel syntax by default, so no
-// `.intel_syntax` directive is used. Comments use `//`.
+// `_start` builds an identity-mapped page hierarchy for the low 1 GiB,
+// switches the CPU into 64-bit long mode, then calls the Rust entry
+// `rust_entry`. At PVH entry `ebx` holds the physical address of the
+// `hvm_start_info` structure, which is preserved for the Rust side.
+//
+// This toolchain assembles global_asm in Intel syntax by default, so no
+// explicit syntax directive is emitted. Comments use `//`.
 
-.set MB_MAGIC,    0x1BADB002
-.set MB_FLAGS,    0x00000000
-.set MB_CHECKSUM, -(MB_MAGIC + MB_FLAGS)
-
-.section .multiboot, "a"
+// ---------------------------------------------------------------------------
+// PVH boot ELF note (XEN_ELFNOTE_PHYS32_ENTRY = 18).
+//
+// Layout: namesz, descsz, type, name ("Xen\0"), desc (32-bit entry address).
+// The note is KEPT first in the image and described by a PT_NOTE program
+// header (see boot/linker.ld) so the loader can discover the entry point.
+// ---------------------------------------------------------------------------
+.section .note.Xen, "a", @note
 .align 4
-    .long MB_MAGIC
-    .long MB_FLAGS
-    .long MB_CHECKSUM
+    .long 2f - 1f                // namesz
+    .long 4f - 3f                // descsz
+    .long 18                     // XEN_ELFNOTE_PHYS32_ENTRY
+1:  .asciz "Xen"
+2:  .align 4
+3:  .long _start                 // 32-bit protected-mode entry point
+4:  .align 4
 
 .section .text._start, "ax"
 .code32
@@ -34,9 +47,9 @@ _start:
     cli
     lea esp, [boot_stack_top]
 
-    // Preserve the multiboot info pointer (ebx) for the Rust side.
-    mov [mb_info_ptr], ebx
-    mov dword ptr [mb_info_ptr + 4], 0
+    // Preserve the PVH hvm_start_info pointer (ebx) for the Rust side.
+    mov [pvh_info_ptr], ebx
+    mov dword ptr [pvh_info_ptr + 4], 0
 
     call zero_tables
     call setup_page_tables
@@ -117,7 +130,7 @@ long_mode_start:
 
     lea rsp, [boot_stack_top]
     xor rbp, rbp
-    mov rdi, [mb_info_ptr]       // first argument: multiboot info pointer
+    mov rdi, [pvh_info_ptr]      // first argument: PVH hvm_start_info pointer
     call rust_entry
 hang:
     cli
@@ -135,7 +148,7 @@ gdt64_pointer:
 
 .section .bss, "aw", @nobits
 .align 8
-mb_info_ptr:
+pvh_info_ptr:
     .skip 8
 .align 4096
 pml4:
