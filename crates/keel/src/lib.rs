@@ -78,19 +78,11 @@ pub fn kmain(boot: &BootInfo) -> ! {
     }
 
     // Replace the throwaway bootstrap identity map with a Hull-built kernel
-    // address space that enforces per-section W^X, then prove we survived the
-    // CR3 switch by continuing to run and log from it.
-    match hull::paging::init_kernel_address_space(&mut frames) {
-        Some(root) => {
-            hull::kprintln!(
-                "keel: kernel address space active — per-section W^X, CR3={root:#x}"
-            );
-            start_timer(root, &mut frames);
-        }
-        None => hull::kprintln!(
-            "keel: WARNING could not build kernel address space; on bootstrap tables"
-        ),
-    }
+    // address space and arm the platform timer. On x86_64 this installs the
+    // per-section W^X mapping plus the local APIC periodic timer; other
+    // architectures defer MMU + interrupt-controller bring-up to a later
+    // Phase 1 slice and keep running on the bootstrap mapping.
+    activate_address_space(&mut frames);
 
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
@@ -99,19 +91,38 @@ pub fn kmain(boot: &BootInfo) -> ! {
     idle()
 }
 
-/// Bring up the local APIC periodic timer on architectures that support it.
+/// Build the kernel address space and arm the platform timer (x86_64).
+///
+/// Installs the Hull-built per-section W^X mapping, then brings up the local
+/// APIC periodic timer on top of it.
 #[cfg(target_arch = "x86_64")]
-fn start_timer(root: u64, frames: &mut FrameAllocator) {
-    if hull::apic::init_timer(root, frames) {
-        hull::kprintln!("keel: local APIC + periodic timer armed (vector 0x40)");
-    } else {
-        hull::kprintln!("keel: WARNING could not bring up local APIC timer");
+fn activate_address_space(frames: &mut FrameAllocator) {
+    match hull::paging::init_kernel_address_space(frames) {
+        Some(root) => {
+            hull::kprintln!(
+                "keel: kernel address space active — per-section W^X, CR3={root:#x}"
+            );
+            if hull::apic::init_timer(root, frames) {
+                hull::kprintln!("keel: local APIC + periodic timer armed (vector 0x40)");
+            } else {
+                hull::kprintln!("keel: WARNING could not bring up local APIC timer");
+            }
+        }
+        None => hull::kprintln!(
+            "keel: WARNING could not build kernel address space; on bootstrap tables"
+        ),
     }
 }
 
-/// Portable fallback until other architectures grow an interrupt controller.
+/// Portable fallback: keep running on the bootstrap mapping until this
+/// architecture grows an MMU + interrupt controller (aarch64: GIC + the ARM
+/// generic timer, tracked in ROADMAP Phase 1).
 #[cfg(not(target_arch = "x86_64"))]
-fn start_timer(_root: u64, _frames: &mut FrameAllocator) {}
+fn activate_address_space(_frames: &mut FrameAllocator) {
+    hull::kprintln!(
+        "keel: MMU + timer bring-up deferred (aarch64 GIC/generic-timer is ROADMAP Phase 1)"
+    );
+}
 
 /// Park the CPU, waking only to service interrupts (e.g. the periodic timer).
 fn idle() -> ! {
