@@ -28,14 +28,15 @@ crate compiles as a stub for both targets.
 
 **Exit criteria.** Serial "hello from Keel" on x86_64 + aarch64 under QEMU.
 
-- [x] `Hull`: CPU bring-up, GDT/TSS/IDT + CPU exceptions (x86_64); aarch64 vectors 🟡
+- [x] `Hull`: CPU bring-up, GDT/TSS/IDT + CPU exceptions (x86_64); aarch64 EL1 vector table (minimal halt) 🟡
 - [x] `Hull`: physical memory map discovery (PVH `hvm_start_info`), early bump frame allocator
 - [x] `Hull`: MMU enable, per-section W^X page attributes (4 KiB kernel image + 2 MiB identity)
 - [ ] `Hull`: higher-half kernel relocation
 - [x] `Hull`: x86_64 local APIC + periodic timer interrupt (IDT gate → ISR → EOI → iretq)
 - [ ] `Hull`: aarch64 GIC + generic timer
-- [x] `Hull`: 16550 UART serial driver (x86_64) + `kprintln!`; PL011 (aarch64) 🟡
-- [x] `boot` crate: freestanding `_start` + boot stack -> `keel::kmain`
+- [x] `Hull`: 16550 UART serial driver (x86_64) + `kprintln!`; PL011 (aarch64, QEMU `virt`)
+- [x] `boot` crate: freestanding `_start` + boot stack -> `keel::kmain` (x86_64 PVH)
+- [x] `boot` crate: aarch64 `_start` shim (EL2→EL1, `.bss` clear, `VBAR_EL1`) + QEMU `virt` link script
 - [x] `keel::kmain` boot banner over the early serial console
 - [x] Panic handler over serial (backtrace + early `alloc` bump->buddy pending)
 - [x] Loader handoff: Multiboot1 + 32→64-bit long-mode trampoline; boots under `qemu -kernel` (UEFI/`limine` + memory map later) 🟡
