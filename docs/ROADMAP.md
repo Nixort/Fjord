@@ -29,14 +29,14 @@ crate compiles as a stub for both targets.
 **Exit criteria.** Serial "hello from Keel" on x86_64 + aarch64 under QEMU.
 
 - [x] `Hull`: CPU bring-up, GDT/TSS/IDT + CPU exceptions (x86_64); aarch64 vectors 🟡
-- [ ] `Hull`: physical memory map discovery, early frame allocator
+- [x] `Hull`: physical memory map discovery (PVH `hvm_start_info`), early bump frame allocator
 - [ ] `Hull`: MMU enable, higher-half kernel, W^X page attributes
 - [ ] `Hull`: timer + interrupt controller (APIC / GIC)
 - [x] `Hull`: 16550 UART serial driver (x86_64) + `kprintln!`; PL011 (aarch64) 🟡
 - [x] `boot` crate: freestanding `_start` + boot stack -> `keel::kmain`
 - [x] `keel::kmain` boot banner over the early serial console
 - [x] Panic handler over serial (backtrace + early `alloc` bump->buddy pending)
-- [x] Loader handoff: PVH note + 32→64-bit long-mode trampoline; boots under `qemu -kernel` (UEFI/`limine` + memory map later) 🟡
+- [x] Loader handoff: Multiboot1 + 32→64-bit long-mode trampoline; boots under `qemu -kernel` (UEFI/`limine` + memory map later) 🟡
 
 ## Phase 2 — Keel microkernel core  (⬜)
 
