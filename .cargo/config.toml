@@ -19,3 +19,14 @@ build-std-features = ["compiler-builtins-mem"]
 [alias]
 # `cargo shipwright -- build` runs the build orchestrator on the host.
 shipwright = "run -p shipwright --target x86_64-unknown-linux-gnu --"
+
+# aarch64 (QEMU virt) uses the built-in softfloat target: the soft-float ABI is
+# baked in correctly, so disabling NEON/FP no longer trips the rustc ABI check.
+# We add +strict-align (MMU is off in early boot -> all accesses are Device
+# memory, which faults on misalignment) and pin the static relocation model so
+# the absolute link script (boot/linker-aarch64.ld) emits no dynamic relocs.
+[target.aarch64-unknown-none-softfloat]
+rustflags = [
+    "-C", "target-feature=+strict-align",
+    "-C", "relocation-model=static",
+]
