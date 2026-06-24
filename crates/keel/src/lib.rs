@@ -103,6 +103,11 @@ pub fn kmain(boot: &BootInfo) -> ! {
         Err(e) => hull::kprintln!("keel: WARNING cdt self-test failed: {e:?}"),
     }
 
+    match vspace::selftest() {
+        Ok(()) => hull::kprintln!("keel: vspace self-test -> map/translate/unmap OK"),
+        Err(e) => hull::kprintln!("keel: WARNING vspace self-test failed: {e:?}"),
+    }
+
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then
