@@ -20,6 +20,9 @@ pub mod boot;
 pub mod mmu;
 #[cfg(target_arch = "x86_64")]
 pub mod paging;
+#[cfg(target_arch = "aarch64")]
+#[path = "paging_aarch64.rs"]
+pub mod paging;
 pub mod irq;
 pub mod timer;
 pub mod serial;

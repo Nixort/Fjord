@@ -121,9 +121,18 @@ fn activate_address_space(frames: &mut FrameAllocator) {
 /// generic timer come up now so the scheduler gains a tick source, mirroring
 /// the x86_64 local-APIC timer.
 #[cfg(target_arch = "aarch64")]
-fn activate_address_space(_frames: &mut FrameAllocator) {
+fn activate_address_space(frames: &mut FrameAllocator) {
+    let ram_top = frames.usable_top();
+    match hull::paging::init_kernel_address_space(frames, ram_top) {
+        Some(ttbr0) => hull::kprintln!(
+            "keel: kernel address space active — per-section W^X, TTBR0={ttbr0:#x}"
+        ),
+        None => hull::kprintln!(
+            "keel: WARNING could not build kernel address space; on bootstrap flat map"
+        ),
+    }
     if hull::gic::init_timer() {
-        hull::kprintln!("keel: GIC v2 + generic timer armed (PPI 30); MMU W^X deferred");
+        hull::kprintln!("keel: GIC v2 + generic timer armed (PPI 30)");
     } else {
         hull::kprintln!("keel: WARNING generic timer unavailable (CNTFRQ_EL0 = 0)");
     }

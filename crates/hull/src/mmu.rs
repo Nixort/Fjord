@@ -131,4 +131,18 @@ impl FrameAllocator {
         }
         frames
     }
+
+    /// Highest end address (exclusive) across all usable regions, or 0 if none.
+    ///
+    /// Used by the aarch64 MMU bring-up to size the identity map to actual RAM.
+    pub fn usable_top(&self) -> u64 {
+        let mut top = 0;
+        for i in 0..self.boot.region_count() {
+            let r = self.boot.region(i);
+            if r.kind.is_usable() && r.end() > top {
+                top = r.end();
+            }
+        }
+        top
+    }
 }
