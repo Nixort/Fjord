@@ -9,18 +9,38 @@
 
 // Fjord aarch64 boot shim (QEMU `virt`).
 //
-// QEMU loads this freestanding ELF via `-kernel` at its physical link address
-// (0x4008_0000) and enters at `_start`. Depending on the QEMU configuration the
-// CPU may start in EL2 or EL1; this shim normalises to EL1, installs a minimal
-// exception vector table, sets up a boot stack, clears `.bss`, then calls the
-// Rust entry `rust_entry`. The flattened device-tree pointer QEMU passes in
-// `x0` is preserved as the first argument.
+// The kernel carries a Linux arm64 Image header (see the arm64 booting
+// protocol) so QEMU's `-kernel` loader treats the flat binary as a Linux
+// kernel: it loads the image at RAM base + text_offset (0x4008_0000), enters at
+// the first instruction, and -- crucially -- passes the flattened device-tree
+// blob pointer in `x0`. A bare ELF does NOT get the DTB in `x0`, which is why
+// the build objcopies the ELF to a raw binary before launch.
+//
+// Depending on the QEMU configuration the CPU may start in EL2 or EL1; this
+// shim normalises to EL1, installs a minimal exception vector table, sets up a
+// boot stack, clears `.bss`, then calls the Rust entry `rust_entry`, preserving
+// the DTB pointer as the first argument.
 //
 // The integrated assembler defaults to AArch64 syntax; comments use `//`.
 
 .section .text._start, "ax"
 .global _start
 _start:
+    // ---- Linux arm64 Image header (Documentation/arm64/booting.rst) --------
+    // Lets QEMU boot the flat binary via the Linux protocol and hand us the
+    // DTB pointer in x0. code0 branches over the 64-byte header to _entry.
+    b       _entry                  // code0 @0:  branch past the header
+    .long   0                       // code1 @4:  reserved
+    .quad   0x80000                 // text_offset @8:  load offset from RAM base
+    .quad   __image_size            // image_size @16: bytes to reserve (incl .bss)
+    .quad   0                       // flags @24: LE, 4 KiB pages, fixed placement
+    .quad   0                       // res2 @32
+    .quad   0                       // res3 @40
+    .quad   0                       // res4 @48
+    .ascii  "ARM\x64"               // magic @56: 0x644d5241
+    .long   0                       // res5 @60: PE/COFF header offset (unused)
+
+_entry:
     // Preserve the DTB pointer (x0) across early bring-up.
     mov     x19, x0
 
