@@ -13,15 +13,23 @@
 use std::path::PathBuf;
 
 fn main() {
-    // <repo>/crates/boot -> <repo>/boot/linker.ld
+    // Pick the per-architecture link script: <repo>/boot/linker{,-aarch64}.ld.
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let script = match arch.as_str() {
+        "aarch64" => "boot/linker-aarch64.ld",
+        _ => "boot/linker.ld",
+    };
+
+    // <repo>/crates/boot -> <repo>/<script>
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let linker_script = manifest
         .parent()
         .and_then(|p| p.parent())
-        .map(|root| root.join("boot/linker.ld"))
-        .expect("failed to locate boot/linker.ld relative to crate manifest");
+        .map(|root| root.join(script))
+        .unwrap_or_else(|| panic!("failed to locate {script} relative to crate manifest"));
 
     println!("cargo:rustc-link-arg=-T{}", linker_script.display());
     println!("cargo:rerun-if-changed={}", linker_script.display());
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
 }
