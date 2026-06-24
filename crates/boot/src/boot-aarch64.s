@@ -110,18 +110,19 @@ park_cpu:
     b       park_cpu
 
 // ---------------------------------------------------------------------------
-// Minimal EL1 exception vector table: 16 entries x 128 bytes, 2 KiB-aligned.
+// EL1 exception vector table: 16 entries x 128 bytes, 2 KiB-aligned.
 //
-// During early bring-up interrupts are masked and no exceptions are expected,
-// so every vector funnels into a halt loop rather than a dispatcher. Real
-// handlers arrive with the GIC + generic-timer slice (ROADMAP Phase 1).
+// The Current-EL synchronous slots dispatch through `el1_sync` (hull::arch::
+// aarch64) which decodes ESR_EL1 and reports the fault; the Current-EL SPx IRQ
+// slot dispatches through `el1_irq` (hull::gic). Lower-EL slots stay parked in
+// `exc_halt` until user space lands (ROADMAP Phase 2).
 // ---------------------------------------------------------------------------
 .section .text.vectors, "ax"
 .balign 0x800
 .global __vectors
 __vectors:
     .balign 0x80
-    b       exc_halt            // Current EL, SP0:  Synchronous
+    b       el1_sync            // Current EL, SP0:  Synchronous -> ESR decoder
     .balign 0x80
     b       exc_halt            // Current EL, SP0:  IRQ
     .balign 0x80
@@ -129,7 +130,7 @@ __vectors:
     .balign 0x80
     b       exc_halt            // Current EL, SP0:  SError
     .balign 0x80
-    b       exc_halt            // Current EL, SPx:  Synchronous
+    b       el1_sync            // Current EL, SPx:  Synchronous -> ESR decoder
     .balign 0x80
     b       el1_irq             // Current EL, SPx:  IRQ -> GIC dispatcher
     .balign 0x80
