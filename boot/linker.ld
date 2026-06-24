@@ -54,6 +54,11 @@ SECTIONS {
         *(COMMON)
     } :data
 
+    /* End of the loaded kernel image; the early frame allocator never hands
+       out physical frames below this watermark. */
+    . = ALIGN(4K);
+    __kernel_end = .;
+
     /DISCARD/ : {
         *(.eh_frame)
         *(.eh_frame_hdr)
