@@ -44,6 +44,10 @@ pub const HUGE: u64 = 1 << 7;
 pub const GLOBAL: u64 = 1 << 8;
 /// Execution disabled (requires `EFER.NXE`).
 pub const NO_EXECUTE: u64 = 1 << 63;
+/// Page-level write-through caching.
+pub const WRITE_THROUGH: u64 = 1 << 3;
+/// Page-level cache disable (used for memory-mapped device pages such as MMIO).
+pub const CACHE_DISABLE: u64 = 1 << 4;
 
 /// Mask selecting the physical-address field of a page-table entry (bits 12..=51).
 const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
@@ -101,6 +105,15 @@ impl Mapper {
     /// Physical address of the root PML4; load it into CR3 to activate.
     pub fn root(&self) -> u64 {
         self.pml4
+    }
+
+    /// Reconstruct a mapper over an already-active PML4 (e.g. the live CR3).
+    ///
+    /// # Safety
+    /// `pml4` must be a valid PML4 whose tables are all reachable at their
+    /// identity-mapped physical addresses.
+    pub unsafe fn from_root(pml4: u64) -> Mapper {
+        Mapper { pml4 }
     }
 
     /// Return the next-level table referenced by `table[index]`, creating and
@@ -199,6 +212,29 @@ fn alloc_zeroed(alloc: &mut FrameAllocator) -> Option<u64> {
         core::ptr::write_bytes(frame as *mut u8, 0, FRAME_SIZE as usize);
     }
     Some(frame)
+}
+
+/// Identity-map a single device MMIO page into the live kernel address space.
+///
+/// Maps `phys` (rounded down to a 4 KiB boundary) as uncacheable, writable and
+/// non-executable at the same virtual address, then flushes its TLB entry.
+/// Returns the virtual address (equal to the page base) on success. Used for
+/// memory-mapped device registers, such as the local APIC, that live above the
+/// identity-mapped RAM window.
+pub fn map_mmio_page(kernel_pml4: u64, phys: u64, alloc: &mut FrameAllocator) -> Option<u64> {
+    let page = phys & !(FRAME_SIZE - 1);
+    // SAFETY: `kernel_pml4` is the live kernel PML4 from
+    // `init_kernel_address_space`; all of its tables are identity-mapped.
+    let mut mapper = unsafe { Mapper::from_root(kernel_pml4) };
+    let flags = PRESENT | WRITABLE | NO_EXECUTE | CACHE_DISABLE | WRITE_THROUGH;
+    if !mapper.map_4k(page, page, flags, alloc) {
+        return None;
+    }
+    // SAFETY: invalidate any stale TLB entry for the freshly mapped device page.
+    unsafe {
+        core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags));
+    }
+    Some(page)
 }
 
 extern "C" {
