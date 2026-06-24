@@ -81,24 +81,47 @@ pub fn kmain(boot: &BootInfo) -> ! {
     // address space that enforces per-section W^X, then prove we survived the
     // CR3 switch by continuing to run and log from it.
     match hull::paging::init_kernel_address_space(&mut frames) {
-        Some(root) => hull::kprintln!(
-            "keel: kernel address space active — per-section W^X, CR3={root:#x}"
-        ),
+        Some(root) => {
+            hull::kprintln!(
+                "keel: kernel address space active — per-section W^X, CR3={root:#x}"
+            );
+            start_timer(root, &mut frames);
+        }
         None => hull::kprintln!(
             "keel: WARNING could not build kernel address space; on bootstrap tables"
         ),
     }
 
-    hull::kprintln!("keel: early console up; halting (Phase 2 boot pending).");
+    hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then
     // launch the first userspace task.
     idle()
 }
 
-/// Park the CPU forever without hammering the bus harder than necessary.
+/// Bring up the local APIC periodic timer on architectures that support it.
+#[cfg(target_arch = "x86_64")]
+fn start_timer(root: u64, frames: &mut FrameAllocator) {
+    if hull::apic::init_timer(root, frames) {
+        hull::kprintln!("keel: local APIC + periodic timer armed (vector 0x40)");
+    } else {
+        hull::kprintln!("keel: WARNING could not bring up local APIC timer");
+    }
+}
+
+/// Portable fallback until other architectures grow an interrupt controller.
+#[cfg(not(target_arch = "x86_64"))]
+fn start_timer(_root: u64, _frames: &mut FrameAllocator) {}
+
+/// Park the CPU, waking only to service interrupts (e.g. the periodic timer).
 fn idle() -> ! {
     loop {
+        // SAFETY: `hlt` halts until the next interrupt; portable targets spin.
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
+        #[cfg(not(target_arch = "x86_64"))]
         core::hint::spin_loop();
     }
 }
