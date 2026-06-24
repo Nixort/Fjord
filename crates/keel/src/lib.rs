@@ -148,12 +148,11 @@ fn activate_address_space(frames: &mut FrameAllocator) {
     }
 }
 
-/// Arm the aarch64 platform timer (GIC v2 + the ARM generic timer).
+/// Build the aarch64 kernel address space and arm the platform timer.
 ///
-/// The aarch64 MMU (per-section W^X paging) is still a later Phase 1 slice, so
-/// we keep running on the bootstrap flat map; but the interrupt controller and
-/// generic timer come up now so the scheduler gains a tick source, mirroring
-/// the x86_64 local-APIC timer.
+/// Installs the Hull-built per-section W^X mapping (TTBR0), then brings up the
+/// GIC v2 + ARM generic timer so the scheduler gains a tick source, mirroring
+/// the x86_64 local-APIC timer path.
 #[cfg(target_arch = "aarch64")]
 fn activate_address_space(frames: &mut FrameAllocator) {
     let ram_top = frames.usable_top();

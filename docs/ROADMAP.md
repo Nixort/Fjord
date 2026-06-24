@@ -28,12 +28,12 @@ crate compiles as a stub for both targets.
 
 **Exit criteria.** Serial "hello from Keel" on x86_64 + aarch64 under QEMU.
 
-- [x] `Hull`: CPU bring-up, GDT/TSS/IDT + CPU exceptions (x86_64); aarch64 EL1 vector table (minimal halt) 🟡
+- [x] `Hull`: CPU bring-up, GDT/TSS/IDT + CPU exceptions (x86_64); aarch64 EL1 vector table + synchronous-exception dispatcher (ESR/FAR decode)
 - [x] `Hull`: physical memory map discovery (PVH `hvm_start_info` on x86_64, flattened device tree `/memory` on aarch64), early bump frame allocator
 - [x] `Hull`: MMU enable, per-section W^X page attributes (4 KiB kernel image + 2 MiB identity)
 - [ ] `Hull`: higher-half kernel relocation
 - [x] `Hull`: x86_64 local APIC + periodic timer interrupt (IDT gate → ISR → EOI → iretq)
-- [ ] `Hull`: aarch64 GIC + generic timer
+- [x] `Hull`: aarch64 GIC v2 + ARM generic timer (PPI 30, EL1 IRQ path)
 - [x] `Hull`: 16550 UART serial driver (x86_64) + `kprintln!`; PL011 (aarch64, QEMU `virt`)
 - [x] `boot` crate: freestanding `_start` + boot stack -> `keel::kmain` (x86_64 PVH)
 - [x] `boot` crate: aarch64 `_start` shim (EL2→EL1, `.bss` clear, `VBAR_EL1`) + QEMU `virt` link script
@@ -41,19 +41,28 @@ crate compiles as a stub for both targets.
 - [x] Panic handler over serial (backtrace + early `alloc` bump->buddy pending)
 - [x] Loader handoff: Multiboot1 + 32→64-bit long-mode trampoline; boots under `qemu -kernel` (UEFI/`limine` + memory map later) 🟡
 
-## Phase 2 — Keel microkernel core  (⬜)
+## Phase 2 — Keel microkernel core  (🟡)
 
 **Goal.** Capabilities, address spaces, IPC, and the Tide scheduler.
 
 **Exit criteria.** Two userspace tasks exchange a message over an endpoint and
 are scheduled by budget; a capability cannot be forged or escalated.
 
-- [ ] CSpace: capability tables, derivation, revocation tree
-- [ ] VSpace: page-table abstraction, map/unmap, W^X invariants
-- [ ] Untyped memory + retype model (seL4-style object allocation)
-- [ ] IPC: synchronous endpoints (fast-path migrating-thread call)
-- [ ] IPC: async notifications + `vmring` shared-memory rings
-- [ ] Tide: MCS scheduling contexts (budget/period), priorities
+**Status.** The six core mechanisms now exist as heap-free, caller-owned-storage
+models, each exercised by a boot-time self-test (green on x86_64 + aarch64). What
+remains is *integration*: fusing the models into live kernel objects retyped from
+untyped memory, wiring VSpace to the Hull page-table mapper, and a real context
+switch driven by the timer IRQ.
+
+- [x] CSpace: capability tables, derivation, revocation tree (`cap` + `cdt`, self-tested)
+- [x] VSpace: page-table abstraction, map/unmap, W^X invariants (`vspace`, self-tested)
+- [x] Untyped memory + retype model (seL4-style object allocation) (`untyped`, self-tested)
+- [x] IPC: synchronous endpoints — rendezvous queue (`ipc`, self-tested; fast-path migrating-thread call still pending)
+- [x] IPC: async notifications + `vmring` shared-memory rings (`ipc`, self-tested)
+- [x] Tide: MCS scheduling contexts (budget/period), priorities (`tide`, self-tested)
+- [ ] CTE integration: fuse cap/cdt/mapping into real CSpace slots retyped from untyped 🟡
+- [ ] VSpace ↔ Hull: drive `Mapper::map_4k`/`map_2m` so map/unmap mutate the live address space 🟡
+- [ ] Tide context switch: register save/restore + handoff on the timer tick 🟡
 - [ ] IRQ delivery as capabilities to userspace drivers
 - [ ] First userspace task launch from Keel
 - [ ] `Cask` MVP: parse + BLAKE3 Merkle verify (loader path) 🟡
