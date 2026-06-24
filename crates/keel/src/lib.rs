@@ -23,6 +23,7 @@ use hull::boot::BootInfo;
 use hull::mmu::{FrameAllocator, FRAME_SIZE};
 
 pub mod cap;
+pub mod cdt;
 pub mod vspace;
 pub mod ipc;
 pub mod tide;
@@ -95,6 +96,11 @@ pub fn kmain(boot: &BootInfo) -> ! {
     match untyped::selftest() {
         Ok(()) => hull::kprintln!("keel: untyped self-test -> retype 3 pages OK"),
         Err(e) => hull::kprintln!("keel: WARNING untyped self-test failed: {e:?}"),
+    }
+
+    match cdt::selftest() {
+        Ok(()) => hull::kprintln!("keel: cdt self-test -> derive/revoke/delete OK"),
+        Err(e) => hull::kprintln!("keel: WARNING cdt self-test failed: {e:?}"),
     }
 
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
