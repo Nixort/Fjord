@@ -7,9 +7,14 @@ balanced* system: a tiny verifiable trusted computing base (TCB), strong
 language-level isolation from Rust, and an end-to-end chain of trust that runs
 `firmware -> kernel -> services -> a specific executable -> a specific operation`.
 
-This repository is an **early-stage skeleton**. Almost everything is a
-documented stub marked with `TODO(...)`. Read `docs/ARCHITECTURE.md` for the
-full design and `docs/ROADMAP.md` for the phased delivery plan.
+This repository is an **early-stage skeleton**, but the microkernel core is
+taking shape. Keel's six core mechanisms — capabilities, a derivation/revocation
+tree, address spaces, untyped retyping, IPC, and the Tide scheduler — exist as
+heap-free models over caller-owned storage, each verified by a boot-time
+self-test that passes on x86_64 and aarch64. The layers above Keel are still
+documented stubs marked with `TODO(...)`. Read `docs/ARCHITECTURE.md` for the
+full design and `docs/ROADMAP.md` for the phased delivery plan and current
+status.
 
 ## Naming (nautical codenames)
 

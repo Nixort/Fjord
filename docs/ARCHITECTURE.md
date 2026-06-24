@@ -31,6 +31,16 @@ Keel is a capability microkernel (seL4 lineage). It implements only:
 
 Everything else (drivers, FS, network, paging policy) lives in userspace.
 
+**Implementation status (v0.0.1).** All six mechanisms above are present as
+heap-free models over caller-owned storage, each with a boot-time self-test that
+passes on x86_64 and aarch64: `cap` (CSpace) and `cdt` (capability
+derivation/revocation tree), `vspace` (map/translate/unmap with W^X), `untyped`
+(retype), `ipc` (synchronous endpoints, async notifications, `vmring`) and `tide`
+(MCS priority scheduler with budget replenishment). They are not yet fused into a
+live kernel: retyping objects from real untyped memory, binding `vspace` to the
+Hull page-table mapper, and a timer-driven context switch are the remaining
+Phase 2 work (see `docs/ROADMAP.md`).
+
 ## 2. Hull — hardware abstraction layer
 
 Thin, mostly-safe wrappers over arch + platform: CPU init, MMU, interrupts,
