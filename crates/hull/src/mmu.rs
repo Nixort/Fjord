@@ -32,8 +32,9 @@ extern "C" {
 /// The kernel is identity-mapped, so its link-time address equals its physical
 /// address.
 fn kernel_end() -> u64 {
-    // SAFETY: we only take the address of the linker symbol, never read it.
-    unsafe { core::ptr::addr_of!(__kernel_end) as u64 }
+    // `addr_of!` only forms a pointer to the linker symbol; it is never
+    // dereferenced here, so no `unsafe` is required.
+    core::ptr::addr_of!(__kernel_end) as u64
 }
 
 /// Round `value` up to the next multiple of `align` (a power of two).

@@ -79,7 +79,8 @@ impl PageTable {
     /// `pa` must be a 4 KiB-aligned, identity-mapped, writable frame that is
     /// not aliased mutably elsewhere for the duration of `'a`.
     unsafe fn from_phys<'a>(pa: u64) -> &'a mut PageTable {
-        &mut *(pa as *mut PageTable)
+        // SAFETY: callers guarantee `pa` is a live, aligned, identity-mapped frame.
+        unsafe { &mut *(pa as *mut PageTable) }
     }
 }
 
@@ -220,16 +221,15 @@ struct KernelLayout {
 }
 
 fn kernel_layout() -> KernelLayout {
-    // SAFETY: we only take the addresses of linker-defined symbols.
-    unsafe {
-        KernelLayout {
-            text_start: addr_of!(__text_start) as u64,
-            text_end: addr_of!(__text_end) as u64,
-            rodata_start: addr_of!(__rodata_start) as u64,
-            rodata_end: addr_of!(__rodata_end) as u64,
-            data_start: addr_of!(__data_start) as u64,
-            kernel_end: addr_of!(__kernel_end) as u64,
-        }
+    // `addr_of!` only forms pointers to linker-defined symbols; nothing is
+    // dereferenced, so no `unsafe` is required.
+    KernelLayout {
+        text_start: addr_of!(__text_start) as u64,
+        text_end: addr_of!(__text_end) as u64,
+        rodata_start: addr_of!(__rodata_start) as u64,
+        rodata_end: addr_of!(__rodata_end) as u64,
+        data_start: addr_of!(__data_start) as u64,
+        kernel_end: addr_of!(__kernel_end) as u64,
     }
 }
 
@@ -301,22 +301,27 @@ pub fn init_kernel_address_space(alloc: &mut FrameAllocator) -> Option<u64> {
 unsafe fn activate(pml4_phys: u64) {
     use core::arch::asm;
 
-    // EFER.NXE (bit 11) must be set before any live entry carries the NX bit.
-    const IA32_EFER: u32 = 0xC000_0080;
-    let mut lo: u32;
-    let hi: u32;
-    asm!("rdmsr", in("ecx") IA32_EFER, out("eax") lo, out("edx") hi,
-         options(nostack, preserves_flags));
-    lo |= 1 << 11;
-    asm!("wrmsr", in("ecx") IA32_EFER, in("eax") lo, in("edx") hi,
-         options(nostack, preserves_flags));
+    // SAFETY: the caller guarantees `pml4_phys` maps the running code, the
+    // active stack and the page tables themselves; NXE is set before any NX
+    // entry goes live and WP before the CR3 load.
+    unsafe {
+        // EFER.NXE (bit 11) must be set before any live entry carries the NX bit.
+        const IA32_EFER: u32 = 0xC000_0080;
+        let mut lo: u32;
+        let hi: u32;
+        asm!("rdmsr", in("ecx") IA32_EFER, out("eax") lo, out("edx") hi,
+             options(nostack, preserves_flags));
+        lo |= 1 << 11;
+        asm!("wrmsr", in("ecx") IA32_EFER, in("eax") lo, in("edx") hi,
+             options(nostack, preserves_flags));
 
-    // CR0.WP (bit 16): ring-0 writes honour read-only pages.
-    let mut cr0: u64;
-    asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
-    cr0 |= 1 << 16;
-    asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack, preserves_flags));
+        // CR0.WP (bit 16): ring-0 writes honour read-only pages.
+        let mut cr0: u64;
+        asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
+        cr0 |= 1 << 16;
+        asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack, preserves_flags));
 
-    // Switch address space; this flushes the non-global TLB.
-    asm!("mov cr3, {}", in(reg) pml4_phys, options(nostack, preserves_flags));
+        // Switch address space; this flushes the non-global TLB.
+        asm!("mov cr3, {}", in(reg) pml4_phys, options(nostack, preserves_flags));
+    }
 }
