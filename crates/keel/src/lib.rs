@@ -92,6 +92,11 @@ pub fn kmain(boot: &BootInfo) -> ! {
         Err(e) => hull::kprintln!("keel: WARNING cspace self-test failed: {e:?}"),
     }
 
+    match untyped::selftest() {
+        Ok(()) => hull::kprintln!("keel: untyped self-test -> retype 3 pages OK"),
+        Err(e) => hull::kprintln!("keel: WARNING untyped self-test failed: {e:?}"),
+    }
+
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then
