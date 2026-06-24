@@ -147,6 +147,15 @@ impl BootInfo {
         }
     }
 
+    /// An empty, invalid memory map for boots without a PVH hand-off.
+    ///
+    /// Used by the aarch64 entry path until the flattened device tree is
+    /// parsed: Keel still brings up the console and parks, it just sees no
+    /// usable RAM yet.
+    pub const fn none() -> Self {
+        Self::empty()
+    }
+
     /// Whether a valid PVH `hvm_start_info` was found.
     pub fn is_valid(&self) -> bool {
         self.valid

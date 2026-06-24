@@ -18,6 +18,7 @@
 pub mod arch;
 pub mod boot;
 pub mod mmu;
+#[cfg(target_arch = "x86_64")]
 pub mod paging;
 pub mod irq;
 pub mod timer;
