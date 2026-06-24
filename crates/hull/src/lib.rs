@@ -16,6 +16,7 @@
 #![allow(dead_code)]
 
 pub mod arch;
+pub mod boot;
 pub mod mmu;
 pub mod irq;
 pub mod timer;
