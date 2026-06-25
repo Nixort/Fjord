@@ -249,6 +249,10 @@ extern "C" fn fjord_irq_dispatch(_frame: u64) {
     // hook leaves the LAPIC ready to deliver the next tick to whichever thread
     // we switch into. No-op until Keel installs a hook.
     crate::sched_hook::run_tick_hook();
+
+    // Deliver this interrupt as a capability-backed notification to any
+    // registered Keel handler. No-op until Keel installs an IRQ hook.
+    crate::irq_hook::run_irq_hook(TIMER_VECTOR as u32);
 }
 
 // Hardware-interrupt entry stubs. Unlike the CPU-exception stubs in

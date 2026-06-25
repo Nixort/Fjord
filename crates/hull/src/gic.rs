@@ -201,6 +201,10 @@ extern "C" fn fjord_aarch64_irq() {
     // hook resumes another thread with the GIC ready to deliver its next tick.
     // No-op until Keel installs a hook.
     crate::sched_hook::run_tick_hook();
+
+    // Deliver this interrupt as a capability-backed notification to any
+    // registered Keel handler. No-op until Keel installs an IRQ hook.
+    crate::irq_hook::run_irq_hook(intid);
 }
 
 // EL1 IRQ trampoline, branched to from the boot vector table's "Current EL SPx

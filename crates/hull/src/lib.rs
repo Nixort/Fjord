@@ -25,6 +25,7 @@ pub mod paging;
 pub mod paging;
 pub mod irq;
 pub mod sched_hook;
+pub mod irq_hook;
 pub mod timer;
 pub mod serial;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]

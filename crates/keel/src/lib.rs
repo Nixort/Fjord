@@ -27,6 +27,7 @@ pub mod cdt;
 pub mod cte;
 pub mod vspace;
 pub mod ipc;
+pub mod irqhandler;
 pub mod tide;
 pub mod untyped;
 
@@ -162,6 +163,18 @@ pub fn kmain(boot: &BootInfo) -> ! {
             s.worker_b
         ),
         Err(e) => hull::kprintln!("keel: WARNING tide preempt self-test failed: {e:?}"),
+    }
+
+    // IRQ-as-capability: prove that a platform timer interrupt is delivered
+    // to a Keel Notification as a badge, via the Hull IRQ hook — the seL4
+    // IRQHandler model, where the kernel *delivers* interrupts rather than
+    // servicing them.
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    match irqhandler::selftest() {
+        Ok(badge) => hull::kprintln!(
+            "keel: irq-handler self-test -> badge {badge:#x} delivered OK"
+        ),
+        Err(e) => hull::kprintln!("keel: WARNING irq-handler self-test failed: {e:?}"),
     }
 
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
