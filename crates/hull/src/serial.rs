@@ -183,8 +183,12 @@ impl Write for Serial {
 /// Backing function for [`crate::kprint!`]; not part of the stable API.
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments<'_>) {
-    // Early boot is single-threaded; a fresh ZST handle per call is fine until
-    // we have a Keel-managed lock post-SMP (TODO(hull)).
+    // Mask interrupts for the duration of the write so the timer ISR (which also
+    // prints) cannot interleave its output between the bytes of this line; the
+    // guard restores the prior state on drop. Early boot is single-threaded
+    // otherwise, so a fresh ZST handle per call is fine until SMP brings a
+    // Keel-managed lock.
+    let _guard = crate::irq::lock();
     let mut serial = Serial;
     let _ = serial.write_fmt(args);
 }
