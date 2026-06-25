@@ -64,7 +64,7 @@ switch driven by the timer IRQ.
 - [x] VSpace ↔ Hull: `HwVSpace` fuses the bookkeeping `VSpace` with `hull`’s `Mapper` so `map`/`unmap` write real 4 KiB hardware leaves (W^X enforced); exercised on an inactive scratch address space — live-regime install (TTBR0/CR3 handoff) still pending ✅
 - [x] Tide context switch: `hull::context` saves/restores callee-saved CPU state and resumes a fresh context on its own stack, proven by a cooperative round-trip self-test (`tide::ctx_selftest`, both arches) ✅
 - [x] Tide preemptive switch: the platform timer ISR alone interleaves two non-cooperative worker contexts via a Hull tick hook (`hull::sched_hook`) that Keel registers, proven by `tide::preempt_selftest` (both arches) ✅
-- [ ] IRQ delivery as capabilities to userspace drivers
+- [x] IRQ delivery as capabilities: `hull::irq_hook` + `keel::irqhandler` — platform timer IRQ delivered to a `Notification` as a badge via an inversion-of-control hook, proven by `irqhandler::selftest` (both arches) ✅
 - [ ] First userspace task launch from Keel
 - [ ] `Cask` MVP: parse + BLAKE3 Merkle verify (loader path) 🟡
 
