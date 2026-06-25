@@ -37,13 +37,17 @@ passes on x86_64 and aarch64: `cap` (CSpace) and `cdt` (capability
 derivation/revocation tree), `vspace` (map/translate/unmap with W^X, bound to the
 Hull page-table mapper), `untyped` (retype), `ipc` (synchronous endpoints, async
 notifications, `vmring`) and `tide` (MCS priority scheduler with budget
-replenishment). As of v0.0.2 the Phase 2 kernel mechanisms are fused and live:
-`vspace` drives real Hull page tables, the scheduler performs cooperative *and*
-preemptive timer-driven context switches, and hardware interrupts are delivered as
-capability-backed notifications (`keel::irqhandler` over the `hull::irq_hook` seam,
-the seL4 IRQHandler model). Eleven boot-time self-tests pass on both targets. The
-remaining work -- retyping live objects from real untyped memory at scale and
-launching the first userspace task -- is tracked in `docs/ROADMAP.md`.
+replenishment). As of v0.0.2 the Phase 2 kernel *mechanisms* are green and their
+*integration* into the live boot path has begun: `vspace` drives real Hull page
+tables, the scheduler performs cooperative *and* preemptive timer-driven context
+switches, hardware interrupts are delivered as capability-backed notifications
+(`keel::irqhandler` over the `hull::irq_hook` seam, the seL4 IRQHandler model),
+and at boot the kernel now stands up its root capability space by retyping the
+initial task's first objects (four pages + a TCB) straight out of a real untyped
+region reserved from physical RAM (`cte::bootstrap_root`). Twelve boot-time
+self-tests pass on both targets. Phase 2 is *not* finished: launching the first
+userspace task (the phase exit criterion) and the `Cask` MVP (parse + BLAKE3
+Merkle verify) remain, tracked in `docs/ROADMAP.md`.
 
 ## 2. Hull — hardware abstraction layer
 

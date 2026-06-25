@@ -41,6 +41,34 @@ pub const ARCH: &str = "aarch64";
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub const ARCH: &str = "unknown";
 
+/// Reserve a contiguous, frame-aligned region of `2^size_bits` bytes from the
+/// bump frame allocator to serve as the boot untyped.
+///
+/// The bump allocator hands out ascending frames; we pull frames until we have
+/// a contiguous run of the required length, restarting the run across any
+/// region boundary (the leaked partial run is never recycled, but on real
+/// hardware the first usable region is large and contiguous, so the run is
+/// satisfied immediately). Returns the region base, or `None` if RAM runs out.
+fn reserve_untyped(frames: &mut FrameAllocator, size_bits: u32) -> Option<u64> {
+    let want = (1u64 << size_bits) / FRAME_SIZE;
+    let mut base = frames.alloc()?;
+    let mut next = base + FRAME_SIZE;
+    let mut got = 1u64;
+    while got < want {
+        let frame = frames.alloc()?;
+        if frame == next {
+            next += FRAME_SIZE;
+            got += 1;
+        } else {
+            // Region boundary: begin a fresh contiguous run at `frame`.
+            base = frame;
+            next = frame + FRAME_SIZE;
+            got = 1;
+        }
+    }
+    Some(base)
+}
+
 /// Kernel entry point, invoked by the `boot` shim once a stack exists.
 ///
 /// Brings up the early serial console, prints a boot banner, logs the physical
@@ -111,6 +139,28 @@ pub fn kmain(boot: &BootInfo) -> ! {
     match cte::selftest() {
         Ok(()) => hull::kprintln!("keel: cte self-test -> retype/mint/revoke OK"),
         Err(e) => hull::kprintln!("keel: WARNING cte self-test failed: {e:?}"),
+    }
+
+    // CTE integration into the live boot path: reserve a *real* untyped region
+    // from physical RAM and stand up the kernel's root capability space,
+    // retyping the initial task's first objects (pages + a TCB) straight out of
+    // that untyped. This is the model going live — the caps now name physical
+    // memory the allocator has handed over, not a synthetic test region.
+    {
+        const BOOT_UNTYPED_BITS: u32 = 18; // 256 KiB boot untyped
+        match reserve_untyped(&mut frames, BOOT_UNTYPED_BITS) {
+            Some(base) => match cte::bootstrap_root(base, BOOT_UNTYPED_BITS) {
+                Ok(r) => hull::kprintln!(
+                    "keel: root cspace -> boot untyped {:#x}/2^{}, {} live slots ({} KiB carved: 4 pages + TCB) OK",
+                    r.untyped_base,
+                    r.untyped_bits,
+                    r.live_slots,
+                    r.used_bytes / 1024
+                ),
+                Err(e) => hull::kprintln!("keel: WARNING root cspace bootstrap failed: {e:?}"),
+            },
+            None => hull::kprintln!("keel: WARNING could not reserve boot untyped region"),
+        }
     }
 
     match vspace::selftest() {

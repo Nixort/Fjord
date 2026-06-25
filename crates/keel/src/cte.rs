@@ -81,6 +81,15 @@ impl Cte {
     pub const fn is_used(self) -> bool {
         self.used
     }
+
+    /// Bytes already carved out of this slot's region by [`CSpace::retype`]
+    /// (meaningful for untyped slots; `0` otherwise). Lets the boot path
+    /// report how much of a region has been consumed without exposing the
+    /// internal field directly.
+    #[must_use]
+    pub const fn watermark(self) -> u64 {
+        self.watermark
+    }
 }
 
 impl Default for Cte {
@@ -457,4 +466,97 @@ pub fn selftest() -> Result<(), CteError> {
     }
 
     Ok(())
+}
+
+/// Object size (address bits) for a thread control block carved at boot.
+///
+/// A full 4 KiB frame for now; the concrete TCB layout (saved context, fault
+/// endpoint, scheduling context) lands with the first-userspace-task slice.
+pub const TCB_BITS: u32 = 12;
+
+/// Number of slots in the kernel's bootstrap root capability node.
+pub const ROOT_SLOTS: usize = 32;
+
+/// Outcome of standing up the live root capability space at boot.
+#[derive(Clone, Copy, Debug)]
+pub struct RootReport {
+    /// Physical base of the boot untyped region.
+    pub untyped_base: u64,
+    /// Size of the boot untyped region in address bits.
+    pub untyped_bits: u32,
+    /// Live slots in the root CSpace after bootstrap (untyped + retyped).
+    pub live_slots: usize,
+    /// Bytes carved out of the boot untyped so far.
+    pub used_bytes: u64,
+}
+
+/// Backing storage for the kernel's bootstrap root capability node.
+///
+/// This is the one CNode the kernel owns directly: it is the root of the whole
+/// derivation tree, so it lives in kernel BSS rather than being retyped from
+/// untyped (there is nothing to retype it *from* yet). Every other object —
+/// including the initial task's own CSpace — is carved from the boot untyped
+/// *through* this node. seL4 calls this the initial thread's root CNode.
+static mut ROOT_CTES: [Cte; ROOT_SLOTS] = [Cte::EMPTY; ROOT_SLOTS];
+
+/// Stand up the live root capability space from a real boot untyped region and
+/// retype the initial task's first kernel objects (pages + a TCB) straight into
+/// it.
+///
+/// This is the bridge from the unit-tested [`CSpace`] model into the live boot
+/// path: unlike [`selftest`], the capabilities recorded here name *real*
+/// physical memory reserved from the frame allocator. `untyped_base` /
+/// `untyped_bits` describe a contiguous, frame-aligned region the caller has
+/// already reserved and must never hand out again.
+///
+/// # Errors
+/// Propagates any [`CteError`] from the underlying insert/retype operations, or
+/// returns one if a post-condition (expected live-slot count, derived
+/// parentage, or TCB typing) does not hold.
+pub fn bootstrap_root(untyped_base: u64, untyped_bits: u32) -> Result<RootReport, CteError> {
+    // SAFETY: single-core early boot is the sole owner of ROOT_CTES; we form a
+    // single &mut to it via a raw ref (no aliasing) for the life of this call.
+    let slots: &mut [Cte] = unsafe { &mut *(&raw mut ROOT_CTES) };
+    let mut cs = CSpace::new(slots);
+
+    // Slot 0: the boot untyped — an original, parentless capability with full
+    // authority. Everything below is derived from it.
+    cs.insert_root(
+        0,
+        Capability::new(
+            CapType::Untyped,
+            untyped_base,
+            u64::from(untyped_bits),
+            Rights::ALL,
+        ),
+    )?;
+
+    // Retype the initial task's first objects straight out of the untyped:
+    //   slots 1..=4 : four 4 KiB pages (its first VSpace frames)
+    //   slot 5      : one TCB
+    let rw = Rights::READ.union(Rights::WRITE);
+    cs.retype(0, CapType::Page, crate::untyped::PAGE_BITS, 4, rw, 1)?;
+    cs.retype(0, CapType::Tcb, TCB_BITS, 1, Rights::ALL, 5)?;
+
+    // Post-conditions: six live slots, every retyped object derived from the
+    // untyped root, and slot 5 really typed as a TCB.
+    let live = cs.count();
+    if live != 6 {
+        return Err(CteError::SlotEmpty);
+    }
+    for i in 1..=5usize {
+        if cs.entry(i)?.parent() != Some(0) || !cs.is_descendant(i, 0) {
+            return Err(CteError::SlotEmpty);
+        }
+    }
+    if cs.get(5)?.cap_type() != CapType::Tcb {
+        return Err(CteError::NotUntyped);
+    }
+
+    Ok(RootReport {
+        untyped_base,
+        untyped_bits,
+        live_slots: live,
+        used_bytes: cs.entry(0)?.watermark(),
+    })
 }

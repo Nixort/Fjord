@@ -60,7 +60,7 @@ switch driven by the timer IRQ.
 - [x] IPC: synchronous endpoints — rendezvous queue (`ipc`, self-tested; fast-path migrating-thread call still pending)
 - [x] IPC: async notifications + `vmring` shared-memory rings (`ipc`, self-tested)
 - [x] Tide: MCS scheduling contexts (budget/period), priorities (`tide`, self-tested)
-- [ ] CTE integration: fuse cap/cdt/mapping into real CSpace slots retyped from untyped 🟡
+- [x] CTE integration: the boot path stands up the kernel root CSpace and retypes the initial task's first objects (4 pages + a TCB) from a real untyped region reserved from RAM (`cte::bootstrap_root`, live in `kmain`)
 - [x] VSpace ↔ Hull: `HwVSpace` fuses the bookkeeping `VSpace` with `hull`’s `Mapper` so `map`/`unmap` write real 4 KiB hardware leaves (W^X enforced); exercised on an inactive scratch address space — live-regime install (TTBR0/CR3 handoff) still pending ✅
 - [x] Tide context switch: `hull::context` saves/restores callee-saved CPU state and resumes a fresh context on its own stack, proven by a cooperative round-trip self-test (`tide::ctx_selftest`, both arches) ✅
 - [x] Tide preemptive switch: the platform timer ISR alone interleaves two non-cooperative worker contexts via a Hull tick hook (`hull::sched_hook`) that Keel registers, proven by `tide::preempt_selftest` (both arches) ✅
