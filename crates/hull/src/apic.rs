@@ -202,6 +202,32 @@ pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
 
+/// Re-arm the periodic LAPIC timer by clearing the LVT mask so ticks resume.
+///
+/// The heartbeat demo in [`fjord_irq_dispatch`] masks the timer after a few
+/// ticks; the preemptive scheduler calls this from its tick hook to keep the
+/// timer alive for as many ticks as its schedule needs. The LAPIC timer runs
+/// in periodic mode, so clearing the mask is sufficient -- the initial-count
+/// reload is automatic.
+///
+/// # Safety
+/// The LAPIC window must be mapped (`init_timer` has run).
+pub unsafe fn rearm_timer() {
+    // SAFETY: single MMIO write to the mapped LVT timer register.
+    unsafe { lapic_write(REG_LVT_TIMER, LVT_PERIODIC | TIMER_VECTOR as u32); }
+}
+
+/// Mask the periodic LAPIC timer so no further ticks are delivered.
+///
+/// # Safety
+/// The LAPIC window must be mapped (`init_timer` has run).
+pub unsafe fn mask_timer() {
+    // SAFETY: single MMIO write to the mapped LVT timer register.
+    unsafe {
+        lapic_write(REG_LVT_TIMER, LVT_MASKED | LVT_PERIODIC | TIMER_VECTOR as u32);
+    }
+}
+
 /// Rust side of the periodic timer interrupt: count, log a few, then EOI.
 #[no_mangle]
 extern "C" fn fjord_irq_dispatch(_frame: u64) {
@@ -218,6 +244,11 @@ extern "C" fn fjord_irq_dispatch(_frame: u64) {
     }
     // SAFETY: signal end-of-interrupt so the LAPIC can deliver the next one.
     unsafe { lapic_write(REG_EOI, 0); }
+
+    // Drive the scheduler last, after EOI: a context switch performed by the
+    // hook leaves the LAPIC ready to deliver the next tick to whichever thread
+    // we switch into. No-op until Keel installs a hook.
+    crate::sched_hook::run_tick_hook();
 }
 
 // Hardware-interrupt entry stubs. Unlike the CPU-exception stubs in

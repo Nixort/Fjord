@@ -149,6 +149,21 @@ pub fn kmain(boot: &BootInfo) -> ! {
         }
     }
 
+    // Tide preemptive scheduling: prove the platform timer alone can interleave
+    // two non-cooperative worker contexts. The boot context installs a tick
+    // hook that round-robins the workers from the timer ISR, then verifies both
+    // ran and that the timer drove the full schedule.
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    match tide::preempt_selftest() {
+        Ok(s) => hull::kprintln!(
+            "keel: tide preempt self-test -> {} timer-driven switches (A={}, B={}) OK",
+            s.switches,
+            s.worker_a,
+            s.worker_b
+        ),
+        Err(e) => hull::kprintln!("keel: WARNING tide preempt self-test failed: {e:?}"),
+    }
+
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then

@@ -410,3 +410,203 @@ mod ctx {
         Ok(())
     }
 }
+
+
+/// Failure modes for the preemptive timer-driven scheduling self-test.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PreemptError {
+    /// One of the worker contexts never ran, so no real preemption happened.
+    WorkerIdle,
+    /// The timer drove fewer context switches than the schedule requires.
+    TooFewSwitches,
+}
+
+/// Outcome of a successful [`preempt_selftest`]: how many preemptive switches
+/// the timer drove, and how many loop iterations each worker accumulated while
+/// it held the CPU.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[derive(Clone, Copy, Debug)]
+pub struct PreemptStats {
+    /// Number of timer-driven context switches performed.
+    pub switches: u64,
+    /// Loop iterations accumulated by worker A while it held the CPU.
+    pub worker_a: u64,
+    /// Loop iterations accumulated by worker B while it held the CPU.
+    pub worker_b: u64,
+}
+
+/// Boot-time self-test proving *preemptive*, timer-driven context switching.
+///
+/// [`ctx_selftest`] proved a cooperative round-trip; this proves the real
+/// thing. Two worker contexts that never voluntarily yield are interleaved
+/// purely by the platform timer interrupt. The boot context registers a tick
+/// hook (via [`hull::sched_hook`]) that round-robins boot -> A -> B -> A -> B
+/// -> boot across consecutive ticks, then parks spinning until the schedule
+/// completes. Each worker only ever spins incrementing a counter, so the only
+/// thing that can move the CPU between them is the timer ISR.
+///
+/// # Errors
+/// Returns [`PreemptError`] if either worker never ran, or if the timer drove
+/// fewer switches than the schedule needs.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub fn preempt_selftest() -> Result<PreemptStats, PreemptError> {
+    preempt::selftest()
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+mod preempt {
+    use super::{PreemptError, PreemptStats};
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use hull::context::{self, Context};
+
+    /// Worker stack size; lives in `.bss`, generous for debug builds.
+    const WORKER_STACK_SIZE: usize = 16 * 1024;
+
+    /// Number of tick-driven switches the schedule performs. The final switch
+    /// returns to the boot context, so the demo needs this many live ticks.
+    const SCHEDULE_LEN: u64 = 5;
+
+    /// 16-byte aligned backing storage for a worker context's stack.
+    #[repr(C, align(16))]
+    struct Stack([u8; WORKER_STACK_SIZE]);
+
+    static mut BOOT_CTX: Context = Context::zeroed();
+    static mut A_CTX: Context = Context::zeroed();
+    static mut B_CTX: Context = Context::zeroed();
+    static mut A_STACK: Stack = Stack([0; WORKER_STACK_SIZE]);
+    static mut B_STACK: Stack = Stack([0; WORKER_STACK_SIZE]);
+
+    /// Set once the schedule has handed control back to the boot context.
+    static DONE: AtomicBool = AtomicBool::new(false);
+    /// Count of tick-hook invocations / context switches performed.
+    static STEP: AtomicU64 = AtomicU64::new(0);
+    /// Loop iterations each worker accumulates while running.
+    static A_COUNT: AtomicU64 = AtomicU64::new(0);
+    static B_COUNT: AtomicU64 = AtomicU64::new(0);
+
+    /// Re-arm the platform timer so the demo keeps receiving ticks even after
+    /// the heartbeat demo in Hull would have masked it.
+    #[inline]
+    fn rearm_timer() {
+        // SAFETY: the timer was brought up during `activate_address_space`.
+        unsafe {
+            #[cfg(target_arch = "x86_64")]
+            hull::apic::rearm_timer();
+            #[cfg(target_arch = "aarch64")]
+            hull::gic::rearm_timer();
+        }
+    }
+
+    /// Disable the platform timer once the demo has finished.
+    #[inline]
+    fn stop_timer() {
+        // SAFETY: the timer was brought up during `activate_address_space`.
+        unsafe {
+            #[cfg(target_arch = "x86_64")]
+            hull::apic::mask_timer();
+            #[cfg(target_arch = "aarch64")]
+            hull::gic::disable_timer();
+        }
+    }
+
+    extern "C" fn worker_a() -> ! {
+        // Entered fresh from inside the timer ISR via a cooperative switch, so
+        // interrupts are still masked on this stack (the ISR epilogue that
+        // would have restored them never ran for us). Unmask them or this
+        // worker could never be preempted off the CPU.
+        // SAFETY: a valid stack and a live timer/IDT exist at this point.
+        unsafe { hull::irq::force_enable() };
+        loop {
+            A_COUNT.fetch_add(1, Ordering::Relaxed);
+            core::hint::spin_loop();
+        }
+    }
+
+    extern "C" fn worker_b() -> ! {
+        // SAFETY: see `worker_a`.
+        unsafe { hull::irq::force_enable() };
+        loop {
+            B_COUNT.fetch_add(1, Ordering::Relaxed);
+            core::hint::spin_loop();
+        }
+    }
+
+    /// Tick hook: round-robin the boot context and the two workers, one switch
+    /// per timer tick. Runs in ISR context, after EOI, on the stack of
+    /// whatever thread is currently running.
+    extern "C" fn on_tick() {
+        if DONE.load(Ordering::SeqCst) {
+            return;
+        }
+        // Keep the timer alive across the heartbeat demo's mask point.
+        rearm_timer();
+
+        let k = STEP.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: the boot CPU owns these statics for the duration of the demo.
+        // Each (prev, next) pair matches the deterministic schedule below, and
+        // every `next` context is either freshly initialised (`worker_*`) or
+        // previously suspended at its own `switch` call site.
+        unsafe {
+            let (prev, next): (*mut Context, *const Context) = match k {
+                0 => (&raw mut BOOT_CTX, &raw const A_CTX),
+                1 => (&raw mut A_CTX, &raw const B_CTX),
+                2 => (&raw mut B_CTX, &raw const A_CTX),
+                3 => (&raw mut A_CTX, &raw const B_CTX),
+                _ => {
+                    DONE.store(true, Ordering::SeqCst);
+                    (&raw mut B_CTX, &raw const BOOT_CTX)
+                }
+            };
+            context::switch(prev, next);
+        }
+    }
+
+    pub(super) fn selftest() -> Result<PreemptStats, PreemptError> {
+        DONE.store(false, Ordering::SeqCst);
+        STEP.store(0, Ordering::SeqCst);
+        A_COUNT.store(0, Ordering::SeqCst);
+        B_COUNT.store(0, Ordering::SeqCst);
+
+        // SAFETY: the single boot CPU owns these statics. Seed each worker with
+        // a 16-byte aligned stack top and its entry point; BOOT_CTX is filled
+        // in by the first `switch` away from the boot context.
+        unsafe {
+            let a_top = (&raw mut A_STACK.0) as *mut u8 as usize + WORKER_STACK_SIZE;
+            let b_top = (&raw mut B_STACK.0) as *mut u8 as usize + WORKER_STACK_SIZE;
+            context::init_context(&raw mut A_CTX, a_top, worker_a);
+            context::init_context(&raw mut B_CTX, b_top, worker_b);
+        }
+
+        // Install the hook and re-arm the timer, then spin. The boot context is
+        // preempted on the next tick and only resumes here once the schedule
+        // routes control back to it (with DONE set).
+        hull::sched_hook::set_tick_hook(on_tick);
+        rearm_timer();
+        while !DONE.load(Ordering::SeqCst) {
+            core::hint::spin_loop();
+        }
+
+        // Back on the boot context: tear down so later boot stages and idle see
+        // a quiet, disabled timer and an inert hook. A tick racing this window
+        // hits the `DONE` early-return in `on_tick` (no switch, no re-arm).
+        hull::sched_hook::clear_tick_hook();
+        stop_timer();
+
+        let switches = STEP.load(Ordering::SeqCst);
+        let worker_a = A_COUNT.load(Ordering::SeqCst);
+        let worker_b = B_COUNT.load(Ordering::SeqCst);
+
+        if worker_a == 0 || worker_b == 0 {
+            return Err(PreemptError::WorkerIdle);
+        }
+        if switches < SCHEDULE_LEN {
+            return Err(PreemptError::TooFewSwitches);
+        }
+        Ok(PreemptStats {
+            switches,
+            worker_a,
+            worker_b,
+        })
+    }
+}

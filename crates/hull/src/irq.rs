@@ -42,6 +42,44 @@ pub fn lock() -> IrqGuard {
     IrqGuard(unsafe { mask_and_save() })
 }
 
+/// Unconditionally enable IRQ delivery on the current CPU.
+///
+/// Unlike [`lock`], this neither saves nor restores prior state: it simply
+/// unmasks interrupts. It exists for one narrow purpose -- the entry point of a
+/// freshly built scheduler context. Such a context is first entered via a
+/// cooperative [`crate::context::switch`] performed *inside* the timer ISR, so
+/// it begins life with interrupts still masked (the ISR epilogue, which would
+/// have restored them, never ran for this stack). The new thread must therefore
+/// re-enable interrupts itself, or it could never be preempted.
+///
+/// # Safety
+/// The caller must be ready to take interrupts immediately: a valid stack and
+/// installed interrupt handlers. Intended only for scheduler context entry.
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn force_enable() {
+    // SAFETY: enabling IF on a CPU with a loaded IDT and a valid stack is sound.
+    unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
+}
+
+/// See the x86_64 [`force_enable`].
+///
+/// # Safety
+/// See the x86_64 [`force_enable`].
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn force_enable() {
+    // SAFETY: clearing DAIF.I unmasks IRQs; the GIC and vectors are already up.
+    unsafe {
+        core::arch::asm!("msr daifclr, #2", options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// See the x86_64 [`force_enable`].
+///
+/// # Safety
+/// See the x86_64 [`force_enable`].
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+pub unsafe fn force_enable() {}
+
 #[cfg(target_arch = "x86_64")]
 unsafe fn mask_and_save() -> u64 {
     let flags: u64;
