@@ -31,15 +31,19 @@ Keel is a capability microkernel (seL4 lineage). It implements only:
 
 Everything else (drivers, FS, network, paging policy) lives in userspace.
 
-**Implementation status (v0.0.1).** All six mechanisms above are present as
+**Implementation status (v0.0.2).** All six mechanisms above are present as
 heap-free models over caller-owned storage, each with a boot-time self-test that
 passes on x86_64 and aarch64: `cap` (CSpace) and `cdt` (capability
-derivation/revocation tree), `vspace` (map/translate/unmap with W^X), `untyped`
-(retype), `ipc` (synchronous endpoints, async notifications, `vmring`) and `tide`
-(MCS priority scheduler with budget replenishment). They are not yet fused into a
-live kernel: retyping objects from real untyped memory, binding `vspace` to the
-Hull page-table mapper, and a timer-driven context switch are the remaining
-Phase 2 work (see `docs/ROADMAP.md`).
+derivation/revocation tree), `vspace` (map/translate/unmap with W^X, bound to the
+Hull page-table mapper), `untyped` (retype), `ipc` (synchronous endpoints, async
+notifications, `vmring`) and `tide` (MCS priority scheduler with budget
+replenishment). As of v0.0.2 the Phase 2 kernel mechanisms are fused and live:
+`vspace` drives real Hull page tables, the scheduler performs cooperative *and*
+preemptive timer-driven context switches, and hardware interrupts are delivered as
+capability-backed notifications (`keel::irqhandler` over the `hull::irq_hook` seam,
+the seL4 IRQHandler model). Eleven boot-time self-tests pass on both targets. The
+remaining work -- retyping live objects from real untyped memory at scale and
+launching the first userspace task -- is tracked in `docs/ROADMAP.md`.
 
 ## 2. Hull — hardware abstraction layer
 

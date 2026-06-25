@@ -3,7 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.1
+// Fjord OS — version 0.0.2
 // The code was written for Fjord.
 // 25 june 2026
 
@@ -210,9 +210,6 @@ pub fn selftest() -> Result<u64, IrqError> {
     /// Badge bit for the self-test notification.
     const TEST_BADGE: u64 = 1 << 8; // bit 8, above the heartbeat counters
 
-    /// How many ticks to let the timer run before checking.
-    const TEST_TICKS: u64 = 3;
-
     // Fresh notification on the stack.
     let mut notif = Notification::new();
 
@@ -222,7 +219,7 @@ pub fn selftest() -> Result<u64, IrqError> {
     // Install the Hull IRQ hook so timer interrupts reach our dispatch.
     hull::irq_hook::set_irq_hook(irq_dispatch_shim);
 
-    // Arm the timer and let it fire TEST_TICKS times. We use the existing
+    // Arm the timer and let it fire a few times. We use the existing
     // heartbeat mechanism: re-arm, spin briefly, then check.
     //
     // SAFETY: the APIC/GIC timer has been initialised by `activate_address_space`.
@@ -239,7 +236,7 @@ pub fn selftest() -> Result<u64, IrqError> {
     }
 
     // Spin until dispatch() increments DELIVERED (at least 1 delivery),
-    // or we time out. We cannot rely on platform_ticks() because the
+    // or we time out. We cannot rely on a raw tick counter because the
     // heartbeat demo may have masked the timer on aarch64 (n >= 5 =>
     // set_timer_ctl(0) on every subsequent tick), which would prevent
     // the counter from advancing. The DELIVERED counter is incremented
@@ -284,21 +281,5 @@ pub fn selftest() -> Result<u64, IrqError> {
         Ok(received)
     } else {
         Err(IrqError::NotFound)
-    }
-}
-
-/// Read the platform timer tick counter.
-fn platform_ticks() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        hull::apic::ticks()
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        hull::gic::ticks()
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        0
     }
 }
