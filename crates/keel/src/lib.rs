@@ -136,6 +136,19 @@ pub fn kmain(boot: &BootInfo) -> ! {
         Err(e) => hull::kprintln!("keel: WARNING tide self-test failed: {e:?}"),
     }
 
+    // Tide context switch: prove the real callee-saved register save/restore and
+    // stack handoff by switching into a freshly built context and straight back
+    // -- the mechanism the timer-tick preemptive scheduler will drive.
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    match tide::ctx_selftest() {
+        Ok(()) => {
+            hull::kprintln!("keel: tide ctx-switch self-test -> save/restore/handoff OK")
+        }
+        Err(e) => {
+            hull::kprintln!("keel: WARNING tide ctx-switch self-test failed: {e:?}")
+        }
+    }
+
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
     // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then

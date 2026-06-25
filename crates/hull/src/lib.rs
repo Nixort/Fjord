@@ -26,6 +26,8 @@ pub mod paging;
 pub mod irq;
 pub mod timer;
 pub mod serial;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub mod context;
 #[cfg(target_arch = "x86_64")]
 pub mod apic;
 #[cfg(target_arch = "aarch64")]

@@ -62,7 +62,7 @@ switch driven by the timer IRQ.
 - [x] Tide: MCS scheduling contexts (budget/period), priorities (`tide`, self-tested)
 - [ ] CTE integration: fuse cap/cdt/mapping into real CSpace slots retyped from untyped 🟡
 - [x] VSpace ↔ Hull: `HwVSpace` fuses the bookkeeping `VSpace` with `hull`’s `Mapper` so `map`/`unmap` write real 4 KiB hardware leaves (W^X enforced); exercised on an inactive scratch address space — live-regime install (TTBR0/CR3 handoff) still pending ✅
-- [ ] Tide context switch: register save/restore + handoff on the timer tick 🟡
+- [x] Tide context switch: `hull::context` saves/restores callee-saved CPU state and resumes a fresh context on its own stack, proven by a cooperative round-trip self-test (`tide::ctx_selftest`, both arches); live preemptive handoff from the timer ISR still pending ✅
 - [ ] IRQ delivery as capabilities to userspace drivers
 - [ ] First userspace task launch from Keel
 - [ ] `Cask` MVP: parse + BLAKE3 Merkle verify (loader path) 🟡

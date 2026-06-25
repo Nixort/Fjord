@@ -310,3 +310,103 @@ pub fn selftest() -> Result<(), SchedError> {
 
     Ok(())
 }
+
+
+/// Failure modes for the cooperative context-switch self-test.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CtxError {
+    /// The worker context never executed after the switch into it.
+    DidNotRun,
+    /// The worker handed control back the wrong number of times.
+    BadSwitchCount,
+}
+
+/// Boot-time self-test exercising a *real* cooperative context switch.
+///
+/// It builds a second context on its own stack, switches into it, lets it run
+/// and hand control straight back, then verifies the round-trip happened
+/// exactly once. This proves the callee-saved register save/restore and the
+/// stack handoff in [`hull::context`] -- the substrate the timer-tick
+/// preemptive scheduler will sit on. Interrupts are masked across the switch so
+/// the timer ISR can never observe a half-switched stack; the round-trip is
+/// fully deterministic.
+///
+/// # Errors
+/// Returns [`CtxError`] if the worker context did not run, or if it handed
+/// control back anything other than exactly once.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub fn ctx_selftest() -> Result<(), CtxError> {
+    ctx::selftest()
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+mod ctx {
+    use super::CtxError;
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use hull::context::{self, Context};
+
+    /// Worker stack size. Generous for debug builds; lives in `.bss`.
+    const WORKER_STACK_SIZE: usize = 16 * 1024;
+
+    /// 16-byte aligned backing storage for the worker context's stack.
+    #[repr(C, align(16))]
+    struct Stack([u8; WORKER_STACK_SIZE]);
+
+    static mut MAIN_CTX: Context = Context::zeroed();
+    static mut WORKER_CTX: Context = Context::zeroed();
+    static mut WORKER_STACK: Stack = Stack([0; WORKER_STACK_SIZE]);
+    static WORKER_RAN: AtomicBool = AtomicBool::new(false);
+    static SWITCHES: AtomicU64 = AtomicU64::new(0);
+
+    /// Entry point for the worker context. Records that it ran, then switches
+    /// straight back to the main context; control never returns here.
+    extern "C" fn worker_entry() -> ! {
+        WORKER_RAN.store(true, Ordering::Relaxed);
+        SWITCHES.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: both statics are live for the duration of the self-test on the
+        // single boot CPU. We save our state into WORKER_CTX and resume MAIN_CTX
+        // (the suspended `selftest` frame).
+        unsafe { context::switch(&raw mut WORKER_CTX, &raw const MAIN_CTX) }
+        // `switch` above never returns; park defensively if it somehow did.
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    pub(super) fn selftest() -> Result<(), CtxError> {
+        WORKER_RAN.store(false, Ordering::Relaxed);
+        SWITCHES.store(0, Ordering::Relaxed);
+
+        // SAFETY: the single boot CPU owns these statics. We compute the 16-byte
+        // aligned top of the worker stack and seed a fresh context that begins
+        // executing `worker_entry` on the first switch into it.
+        unsafe {
+            let base = (&raw mut WORKER_STACK.0) as *mut u8 as usize;
+            let top = base + WORKER_STACK_SIZE;
+            context::init_context(&raw mut WORKER_CTX, top, worker_entry);
+        }
+
+        // Fence the cooperative round-trip: the timer ISR must not run on a
+        // half-switched stack. The interrupt-enable state is a CPU flag the
+        // switch does not touch, so it stays masked across the handoff and is
+        // restored when `guard` drops.
+        let guard = hull::irq::lock();
+
+        // main -> worker -> main. Saves the live frame into MAIN_CTX and resumes
+        // here once the worker hands control back.
+        // SAFETY: MAIN_CTX receives our live callee-saved state; WORKER_CTX was
+        // just initialised to enter `worker_entry` on its own stack.
+        unsafe { context::switch(&raw mut MAIN_CTX, &raw const WORKER_CTX) }
+
+        drop(guard);
+
+        if !WORKER_RAN.load(Ordering::Relaxed) {
+            return Err(CtxError::DidNotRun);
+        }
+        if SWITCHES.load(Ordering::Relaxed) != 1 {
+            return Err(CtxError::BadSwitchCount);
+        }
+        Ok(())
+    }
+}
