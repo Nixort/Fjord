@@ -97,6 +97,28 @@ pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
 
+/// Re-arm the generic timer for another tick, overriding the heartbeat demo's
+/// mask so the preemptive scheduler keeps receiving ticks.
+///
+/// # Safety
+/// The GIC and generic timer must have been initialised by [`init_timer`].
+pub unsafe fn rearm_timer() {
+    // SAFETY: reload the down-counter and assert ENABLE (clearing IMASK).
+    unsafe {
+        set_timer_tval(INTERVAL.load(Ordering::Relaxed));
+        set_timer_ctl(1);
+    }
+}
+
+/// Disable the generic timer so no further ticks are delivered.
+///
+/// # Safety
+/// The generic timer must have been initialised by [`init_timer`].
+pub unsafe fn disable_timer() {
+    // SAFETY: clearing ENABLE stops the EL1 physical timer from firing.
+    unsafe { set_timer_ctl(0); }
+}
+
 /// Bring up the GIC v2 and arm the generic-timer periodic tick.
 ///
 /// Returns `false` if the platform reports a zero counter frequency (no usable
@@ -174,6 +196,11 @@ extern "C" fn fjord_aarch64_irq() {
     // SAFETY: EOIR must echo the IAR value to drop the running priority so the
     // CPU interface can deliver the next interrupt.
     unsafe { mmio_write(GICC_BASE, GICC_EOIR, iar) };
+
+    // Drive the scheduler last, after EOI: a context switch performed by the
+    // hook resumes another thread with the GIC ready to deliver its next tick.
+    // No-op until Keel installs a hook.
+    crate::sched_hook::run_tick_hook();
 }
 
 // EL1 IRQ trampoline, branched to from the boot vector table's "Current EL SPx

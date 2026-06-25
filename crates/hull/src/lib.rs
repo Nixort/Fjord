@@ -24,6 +24,7 @@ pub mod paging;
 #[path = "paging_aarch64.rs"]
 pub mod paging;
 pub mod irq;
+pub mod sched_hook;
 pub mod timer;
 pub mod serial;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
