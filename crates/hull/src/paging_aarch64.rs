@@ -40,6 +40,7 @@ const PTE_TABLE: u64 = 1 << 1;
 const ATTR_NORMAL: u64 = 0 << 2; // MAIR index 0: Normal write-back
 const ATTR_DEVICE: u64 = 1 << 2; // MAIR index 1: Device-nGnRnE
 const AP_RO: u64 = 1 << 7; // AP[2] = 1: read-only at EL1
+const AP_EL0: u64 = 1 << 6; // AP[1] = 1: unprivileged (EL0) access permitted
 const SH_INNER: u64 = 0b11 << 8; // inner shareable
 const AF: u64 = 1 << 10; // access flag (fault if clear)
 
@@ -116,6 +117,17 @@ impl Mapper {
     /// Physical address of the root table; load it into TTBR0_EL1 to activate.
     pub fn root(&self) -> u64 {
         self.root
+    }
+
+    /// Reconstruct a mapper over an already-live L0 table (e.g. the current
+    /// TTBR0_EL1 root), so new mappings can be added to the running address
+    /// space.
+    ///
+    /// # Safety
+    /// `root` must be a valid L0 table whose descended tables are all reachable
+    /// at their identity-mapped physical addresses.
+    pub unsafe fn from_root(root: u64) -> Mapper {
+        Mapper { root }
     }
 
     /// Return the next-level table referenced by `table[index]`, creating and
@@ -248,6 +260,66 @@ pub fn map_page(
     alloc: &mut FrameAllocator,
 ) -> bool {
     mapper.map_4k(va, pa, leaf_attrs(writable, executable), alloc)
+}
+
+/// Leaf attributes for an EL0-accessible (unprivileged) 4 KiB page.
+///
+/// Sets `AP[1]` so EL0 may access the page, and `PXN` so EL1 can never execute
+/// user memory (kernel W^X then holds trivially). A read-only page also sets
+/// `AP_RO`; a non-EL0-executable page sets `UXN`.
+const fn user_leaf_attrs(writable: bool, executable: bool) -> u64 {
+    let mut attrs = ATTR_NORMAL | SH_INNER | AF | AP_EL0 | PXN;
+    if !writable {
+        attrs |= AP_RO;
+    }
+    if !executable {
+        attrs |= UXN;
+    }
+    attrs
+}
+
+/// Map one 4 KiB EL0-accessible page `va -> pa` into `mapper`.
+///
+/// EL0 reachability comes from the leaf `AP[1]` bit alone; aarch64 table
+/// descriptors do not restrict unprivileged access unless their APTable bits
+/// say so (they stay 0 here), so no per-level widening is needed. User pages
+/// are always `PXN`, so the kernel-W^X invariant in `map_4k` is upheld. Returns
+/// `false` if a table frame could not be allocated.
+#[must_use]
+pub fn map_user_page(
+    mapper: &mut Mapper,
+    va: u64,
+    pa: u64,
+    writable: bool,
+    executable: bool,
+    alloc: &mut FrameAllocator,
+) -> bool {
+    mapper.map_4k(va, pa, user_leaf_attrs(writable, executable), alloc)
+}
+
+/// Physical root (L0 table) of the active address space, read from TTBR0_EL1.
+#[must_use]
+pub fn active_root() -> u64 {
+    let ttbr0: u64;
+    // SAFETY: reading TTBR0_EL1 has no side effects.
+    unsafe {
+        core::arch::asm!(
+            "mrs {}, ttbr0_el1",
+            out(reg) ttbr0,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    ttbr0 & ADDR_MASK
+}
+
+/// Invalidate the TLB entry for the 4 KiB page containing `va` in the active
+/// address space (e.g. after adding a fresh mapping).
+///
+/// # Safety
+/// Only ever drops a cached translation, forcing a re-walk on next access.
+pub unsafe fn flush_tlb_page(va: u64) {
+    // SAFETY: see contract and `flush_tlb_4k`.
+    unsafe { flush_tlb_4k(va) }
 }
 
 /// Remove the 4 KiB mapping at `va`, flushing its TLB entry.
