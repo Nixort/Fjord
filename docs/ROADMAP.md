@@ -61,7 +61,7 @@ switch driven by the timer IRQ.
 - [x] IPC: async notifications + `vmring` shared-memory rings (`ipc`, self-tested)
 - [x] Tide: MCS scheduling contexts (budget/period), priorities (`tide`, self-tested)
 - [ ] CTE integration: fuse cap/cdt/mapping into real CSpace slots retyped from untyped 🟡
-- [ ] VSpace ↔ Hull: drive `Mapper::map_4k`/`map_2m` so map/unmap mutate the live address space 🟡
+- [x] VSpace ↔ Hull: `HwVSpace` fuses the bookkeeping `VSpace` with `hull`’s `Mapper` so `map`/`unmap` write real 4 KiB hardware leaves (W^X enforced); exercised on an inactive scratch address space — live-regime install (TTBR0/CR3 handoff) still pending ✅
 - [ ] Tide context switch: register save/restore + handoff on the timer tick 🟡
 - [ ] IRQ delivery as capabilities to userspace drivers
 - [ ] First userspace task launch from Keel

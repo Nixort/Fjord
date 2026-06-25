@@ -15,14 +15,21 @@
 //! capability back, and `translate` resolves a virtual address to a physical
 //! one plus the rights that govern the access.
 //!
-//! This slice models the *bookkeeping* only — it does not yet touch real
-//! hardware page tables. Storage is caller-owned (`&mut [Mapping]`), so there
-//! is no kernel heap and the mapping budget is explicit. A follow-up slice will
-//! drive `hull`'s architecture `Mapper` (`map_4k`/`map_2m`) from these
-//! operations so a `map` mutates the live translation regime, and will fold the
-//! page capability into the CDT so `revoke` tears mappings down.
+//! [`VSpace`] itself models the *bookkeeping* only; storage is caller-owned
+//! (`&mut [Mapping]`), so there is no kernel heap and the mapping budget is
+//! explicit. [`HwVSpace`] pairs that bookkeeping with `hull`'s architecture
+//! `Mapper` so `map`/`unmap` additionally write the real hardware translation
+//! tables (4 KiB leaves, W^X enforced) and can be cross-checked against them.
+//! An `HwVSpace` is never installed into TTBR0/CR3 by this module, so it can be
+//! built and torn down without disturbing the running kernel. Folding the page
+//! capability into the CDT so `revoke` tears mappings down is still future work.
 
 use crate::cap::{CapType, Capability, Rights};
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use hull::{
+    mmu::FrameAllocator,
+    paging::{self, Mapper},
+};
 
 /// Page size in address bits (4 KiB), matching `hull`'s frame size.
 pub const PAGE_BITS: u32 = 12;
@@ -74,6 +81,9 @@ pub enum VSpaceError {
     NotMapped,
     /// No free mapping slot remains in the backing storage.
     Full,
+    /// A backing hardware page-table operation failed (e.g. a W^X violation or
+    /// no free frame for an intermediate table).
+    HardwareFault,
 }
 
 /// A virtual address space: a flat set of page mappings over caller storage.
@@ -117,6 +127,29 @@ impl<'maps> VSpace<'maps> {
     /// - [`VSpaceError::AlreadyMapped`] if `va` is already mapped.
     /// - [`VSpaceError::Full`] if no free mapping slot remains.
     pub fn map(&mut self, va: u64, page: Capability) -> Result<(), VSpaceError> {
+        self.check_mappable(va, page)?;
+        let idx = self
+            .maps
+            .iter()
+            .position(|m| !m.used)
+            .ok_or(VSpaceError::Full)?;
+        self.maps[idx] = Mapping {
+            va,
+            page,
+            used: true,
+        };
+        Ok(())
+    }
+
+    /// Validate that `page` may be mapped at `va` *without* recording it.
+    ///
+    /// Runs the same guard rails as [`map`](Self::map) — capability type,
+    /// alignment, read access, no duplicate, and a free slot — so a caller that
+    /// also drives hardware tables can check before committing either side.
+    ///
+    /// # Errors
+    /// The same errors as [`map`](Self::map).
+    pub fn check_mappable(&self, va: u64, page: Capability) -> Result<(), VSpaceError> {
         if page.cap_type() != CapType::Page {
             return Err(VSpaceError::NotAPage);
         }
@@ -129,16 +162,9 @@ impl<'maps> VSpace<'maps> {
         if self.find(va).is_some() {
             return Err(VSpaceError::AlreadyMapped);
         }
-        let idx = self
-            .maps
-            .iter()
-            .position(|m| !m.used)
-            .ok_or(VSpaceError::Full)?;
-        self.maps[idx] = Mapping {
-            va,
-            page,
-            used: true,
-        };
+        if !self.maps.iter().any(|m| !m.used) {
+            return Err(VSpaceError::Full);
+        }
         Ok(())
     }
 
@@ -218,6 +244,157 @@ pub fn selftest() -> Result<(), VSpaceError> {
     }
     if vs.count() != 1 {
         return Err(VSpaceError::Full);
+    }
+
+    Ok(())
+}
+
+/// A virtual address space whose `map`/`unmap` drive a live `hull` page-table
+/// [`Mapper`] in addition to the keel-level bookkeeping.
+///
+/// The bookkeeping half ([`VSpace`]) enforces the capability invariants and
+/// records which page backs each VA; the `Mapper` half writes the actual
+/// hardware translation tables. The mapper is *not* installed into TTBR0/CR3 by
+/// this type, so a fresh `HwVSpace` describes an inactive address space that can
+/// be built and torn down without disturbing the running kernel.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub struct HwVSpace<'maps> {
+    book: VSpace<'maps>,
+    mapper: Mapper,
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+impl<'maps> HwVSpace<'maps> {
+    /// Wrap mapping storage and allocate a fresh, empty hardware root table.
+    ///
+    /// Returns `None` if a backing frame for the root table is unavailable.
+    pub fn new(maps: &'maps mut [Mapping], alloc: &mut FrameAllocator) -> Option<Self> {
+        let mapper = Mapper::new(alloc)?;
+        Some(Self {
+            book: VSpace::new(maps),
+            mapper,
+        })
+    }
+
+    /// Physical address of the root translation table (the TTBR0/CR3 value).
+    #[must_use]
+    pub fn root(&self) -> u64 {
+        self.mapper.root()
+    }
+
+    /// Number of live mappings (delegates to the bookkeeping half).
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.book.count()
+    }
+
+    /// Map `page` at page-aligned `va`, writing both the bookkeeping entry and
+    /// the hardware translation tables.
+    ///
+    /// Rights drive the leaf permissions: WRITE makes the page writable and
+    /// EXECUTE makes it executable. A page that is both writable and executable
+    /// is refused by `hull` to uphold W^X.
+    ///
+    /// # Errors
+    /// The [`VSpace::map`] guard-rail errors, plus
+    /// [`VSpaceError::HardwareFault`] if the hardware mapping could not be
+    /// installed. On a hardware fault no bookkeeping entry is recorded.
+    pub fn map(
+        &mut self,
+        va: u64,
+        page: Capability,
+        alloc: &mut FrameAllocator,
+    ) -> Result<(), VSpaceError> {
+        // Validate against the bookkeeping rules first, but do not record yet.
+        self.book.check_mappable(va, page)?;
+        let rights = page.rights();
+        let writable = rights.contains(Rights::WRITE);
+        let executable = rights.contains(Rights::EXECUTE);
+        if !paging::map_page(&mut self.mapper, va, page.object(), writable, executable, alloc) {
+            return Err(VSpaceError::HardwareFault);
+        }
+        // The hardware leaf is in place; record the bookkeeping entry. This
+        // cannot fail because `check_mappable` already proved a free slot.
+        self.book.map(va, page)
+    }
+
+    /// Unmap `va`, clearing the hardware leaf and returning the page cap.
+    ///
+    /// # Errors
+    /// [`VSpaceError::NotMapped`] if nothing is mapped at `va`, or
+    /// [`VSpaceError::HardwareFault`] if the hardware leaf was unexpectedly
+    /// absent.
+    pub fn unmap(&mut self, va: u64) -> Result<Capability, VSpaceError> {
+        // Confirm a bookkeeping entry exists (also validates the page address).
+        if self.book.translate(va).is_err() {
+            return Err(VSpaceError::NotMapped);
+        }
+        if !paging::unmap_page(&mut self.mapper, va) {
+            return Err(VSpaceError::HardwareFault);
+        }
+        self.book.unmap(va)
+    }
+
+    /// Resolve `va` through the hardware tables to `(pa, writable, executable)`.
+    #[must_use]
+    pub fn query(&self, va: u64) -> Option<(u64, bool, bool)> {
+        paging::query_page(&self.mapper, va)
+    }
+}
+
+/// Boot-time self-test that drives the `hull` page-table `Mapper` through
+/// [`HwVSpace`]: it builds an inactive address space, maps a page, verifies the
+/// hardware leaf, proves W^X is enforced, then unmaps and confirms the leaf is
+/// gone. The address space is never installed, so the running kernel is
+/// undisturbed; the handful of frames it consumes are not reclaimed.
+///
+/// # Errors
+/// Returns a [`VSpaceError`] if any invariant fails.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub fn hw_selftest(frames: &mut FrameAllocator) -> Result<(), VSpaceError> {
+    let mut storage = [Mapping::EMPTY; 4];
+    let mut vs = HwVSpace::new(&mut storage, frames).ok_or(VSpaceError::HardwareFault)?;
+
+    // A high, canonical VA well clear of the identity-mapped kernel window.
+    const VA: u64 = 0x10_0000_0000;
+    let pa = frames.alloc().ok_or(VSpaceError::HardwareFault)?;
+    let rw = Rights::READ.union(Rights::WRITE);
+    let rwx = rw.union(Rights::EXECUTE);
+
+    // Map RW and confirm the hardware leaf reports the frame, writable + NX.
+    vs.map(
+        VA,
+        Capability::new(CapType::Page, pa, u64::from(PAGE_BITS), rw),
+        frames,
+    )?;
+    match vs.query(VA) {
+        Some((leaf_pa, true, false)) if leaf_pa == pa => {}
+        _ => return Err(VSpaceError::HardwareFault),
+    }
+    if vs.count() != 1 {
+        return Err(VSpaceError::Full);
+    }
+
+    // W^X: a writable+executable page is refused by the hardware backend and
+    // leaves no bookkeeping entry behind.
+    let wx = Capability::new(CapType::Page, pa, u64::from(PAGE_BITS), rwx);
+    if vs.map(VA + PAGE_SIZE, wx, frames) != Err(VSpaceError::HardwareFault) {
+        return Err(VSpaceError::HardwareFault);
+    }
+    if vs.count() != 1 {
+        return Err(VSpaceError::Full);
+    }
+
+    // Unmap clears the hardware leaf and returns the original capability.
+    let cap = vs.unmap(VA)?;
+    if cap.object() != pa {
+        return Err(VSpaceError::NotMapped);
+    }
+    if vs.query(VA).is_some() {
+        return Err(VSpaceError::HardwareFault);
+    }
+    if vs.unmap(VA) != Err(VSpaceError::NotMapped) {
+        return Err(VSpaceError::NotMapped);
     }
 
     Ok(())

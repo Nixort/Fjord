@@ -203,6 +203,114 @@ impl Mapper {
     }
 }
 
+/// Build leaf flags for a 4 KiB page with the given permissions.
+///
+/// `writable` adds `WRITABLE`; a non-executable page gets `NO_EXECUTE`. A
+/// writable-and-executable request yields flags that [`Mapper::map_4k`]
+/// rejects, preserving W^X.
+const fn leaf_flags(writable: bool, executable: bool) -> u64 {
+    let mut flags = PRESENT;
+    if writable {
+        flags |= WRITABLE;
+    }
+    if !executable {
+        flags |= NO_EXECUTE;
+    }
+    flags
+}
+
+/// Invalidate the TLB entry for the 4 KiB page containing `va`.
+///
+/// # Safety
+/// Issues `invlpg` against the active address space; it only ever drops a
+/// cached translation, forcing a re-walk on the next access.
+unsafe fn flush_tlb_4k(va: u64) {
+    // SAFETY: TLB invalidation is sound; see the function contract.
+    unsafe {
+        core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+    }
+}
+
+/// Follow a present, non-huge table entry to the next-level frame, if any.
+fn walk(table: &PageTable, index: usize) -> Option<u64> {
+    let entry = table.entries[index];
+    if entry & PRESENT != 0 && entry & HUGE == 0 {
+        Some(entry & ADDR_MASK)
+    } else {
+        None
+    }
+}
+
+/// Map one 4 KiB page `va -> pa` with the given permissions into `mapper`.
+///
+/// Permissions are translated to leaf flags; a writable-and-executable request
+/// is refused to uphold W^X. Returns `false` if refused or a table frame could
+/// not be allocated.
+#[must_use]
+pub fn map_page(
+    mapper: &mut Mapper,
+    va: u64,
+    pa: u64,
+    writable: bool,
+    executable: bool,
+    alloc: &mut FrameAllocator,
+) -> bool {
+    mapper.map_4k(va, pa, leaf_flags(writable, executable), alloc)
+}
+
+/// Remove the 4 KiB mapping at `va`, flushing its TLB entry.
+///
+/// Returns `true` if a present leaf was cleared, `false` otherwise.
+#[must_use]
+pub fn unmap_page(mapper: &mut Mapper, va: u64) -> bool {
+    // SAFETY: every table frame is identity-mapped and uniquely owned by
+    // `mapper` while we hold `&mut`.
+    let cleared = unsafe {
+        let pml4 = PageTable::from_phys(mapper.root());
+        let Some(pdpt_f) = walk(pml4, pml4_index(va)) else {
+            return false;
+        };
+        let Some(pd_f) = walk(PageTable::from_phys(pdpt_f), pdpt_index(va)) else {
+            return false;
+        };
+        let Some(pt_f) = walk(PageTable::from_phys(pd_f), pd_index(va)) else {
+            return false;
+        };
+        let pt = PageTable::from_phys(pt_f);
+        if pt.entries[pt_index(va)] & PRESENT == 0 {
+            false
+        } else {
+            pt.entries[pt_index(va)] = 0;
+            true
+        }
+    };
+    if cleared {
+        // SAFETY: drop any stale translation for the now-unmapped page.
+        unsafe { flush_tlb_4k(va) }
+    }
+    cleared
+}
+
+/// Resolve the 4 KiB mapping at `va` to `(pa, writable, executable)`.
+///
+/// Returns `None` if no present 4 KiB leaf maps `va` (including when a 2 MiB
+/// huge page covers it).
+#[must_use]
+pub fn query_page(mapper: &Mapper, va: u64) -> Option<(u64, bool, bool)> {
+    // SAFETY: table frames are identity-mapped and only read here.
+    unsafe {
+        let pml4 = PageTable::from_phys(mapper.root());
+        let pdpt = PageTable::from_phys(walk(pml4, pml4_index(va))?);
+        let pd = PageTable::from_phys(walk(pdpt, pdpt_index(va))?);
+        let pt = PageTable::from_phys(walk(pd, pd_index(va))?);
+        let e = pt.entries[pt_index(va)];
+        if e & PRESENT == 0 {
+            return None;
+        }
+        Some((e & ADDR_MASK, e & WRITABLE != 0, e & NO_EXECUTE == 0))
+    }
+}
+
 /// Allocate a frame and zero it (valid because frames are identity-mapped).
 fn alloc_zeroed(alloc: &mut FrameAllocator) -> Option<u64> {
     let frame = alloc.alloc()?;

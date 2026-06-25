@@ -186,6 +186,123 @@ impl Mapper {
     }
 }
 
+/// Build leaf attributes for a Normal-memory page with the given permissions.
+///
+/// A read-only page sets `AP_RO`; a non-executable page sets `PXN`. A
+/// writable-and-executable request yields attributes that
+/// [`Mapper::map_4k`] rejects, preserving W^X.
+const fn leaf_attrs(writable: bool, executable: bool) -> u64 {
+    let mut attrs = ATTR_NORMAL | SH_INNER | AF | UXN;
+    if !writable {
+        attrs |= AP_RO;
+    }
+    if !executable {
+        attrs |= PXN;
+    }
+    attrs
+}
+
+/// Invalidate the TLB entry (all ASIDs, inner-shareable) for 4 KiB page `va`.
+///
+/// # Safety
+/// Issues TLB maintenance against the active translation regime; it only ever
+/// drops a cached translation, forcing a re-walk on the next access.
+unsafe fn flush_tlb_4k(va: u64) {
+    use core::arch::asm;
+    let arg = va >> 12;
+    // SAFETY: TLB maintenance is sound; see the function contract.
+    unsafe {
+        asm!(
+            "dsb ishst",
+            "tlbi vaae1is, {arg}",
+            "dsb ish",
+            "isb",
+            arg = in(reg) arg,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// Follow a present table descriptor to the next-level frame, if any.
+fn walk(table: &Table, index: usize) -> Option<u64> {
+    let entry = table.entries[index];
+    if entry & PTE_VALID != 0 && entry & PTE_TABLE != 0 {
+        Some(entry & ADDR_MASK)
+    } else {
+        None
+    }
+}
+
+/// Map one 4 KiB page `va -> pa` with the given permissions into `mapper`.
+///
+/// Permissions are translated to Normal-memory leaf attributes; a
+/// writable-and-executable request is refused to uphold W^X. Returns `false`
+/// if refused or a table frame could not be allocated.
+#[must_use]
+pub fn map_page(
+    mapper: &mut Mapper,
+    va: u64,
+    pa: u64,
+    writable: bool,
+    executable: bool,
+    alloc: &mut FrameAllocator,
+) -> bool {
+    mapper.map_4k(va, pa, leaf_attrs(writable, executable), alloc)
+}
+
+/// Remove the 4 KiB mapping at `va`, flushing its TLB entry.
+///
+/// Returns `true` if a valid leaf was present and cleared, `false` otherwise.
+#[must_use]
+pub fn unmap_page(mapper: &mut Mapper, va: u64) -> bool {
+    // SAFETY: every table frame is reachable at its identity-mapped physical
+    // address and uniquely owned by `mapper` while we hold `&mut`.
+    let cleared = unsafe {
+        let l0 = Table::from_phys(mapper.root());
+        let Some(l1f) = walk(l0, l0_index(va)) else {
+            return false;
+        };
+        let Some(l2f) = walk(Table::from_phys(l1f), l1_index(va)) else {
+            return false;
+        };
+        let Some(l3f) = walk(Table::from_phys(l2f), l2_index(va)) else {
+            return false;
+        };
+        let l3 = Table::from_phys(l3f);
+        if l3.entries[l3_index(va)] & PTE_VALID == 0 {
+            false
+        } else {
+            l3.entries[l3_index(va)] = 0;
+            true
+        }
+    };
+    if cleared {
+        // SAFETY: drop any stale translation for the now-unmapped page.
+        unsafe { flush_tlb_4k(va) }
+    }
+    cleared
+}
+
+/// Resolve the 4 KiB mapping at `va` to `(pa, writable, executable)`.
+///
+/// Returns `None` if no valid 4 KiB leaf maps `va` (including when a 2 MiB
+/// block covers it).
+#[must_use]
+pub fn query_page(mapper: &Mapper, va: u64) -> Option<(u64, bool, bool)> {
+    // SAFETY: table frames are identity-mapped and only read here.
+    unsafe {
+        let l0 = Table::from_phys(mapper.root());
+        let l1 = Table::from_phys(walk(l0, l0_index(va))?);
+        let l2 = Table::from_phys(walk(l1, l1_index(va))?);
+        let l3 = Table::from_phys(walk(l2, l2_index(va))?);
+        let e = l3.entries[l3_index(va)];
+        if e & PTE_VALID == 0 || e & PTE_TABLE == 0 {
+            return None;
+        }
+        Some((e & ADDR_MASK, e & AP_RO == 0, e & PXN == 0))
+    }
+}
+
 /// Allocate a frame and zero it (reachable because frames are identity-mapped).
 fn alloc_zeroed(alloc: &mut FrameAllocator) -> Option<u64> {
     let frame = alloc.alloc()?;
