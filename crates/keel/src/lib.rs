@@ -30,6 +30,8 @@ pub mod ipc;
 pub mod irqhandler;
 pub mod tide;
 pub mod untyped;
+#[cfg(target_arch = "x86_64")]
+pub mod userspace;
 
 /// Target architecture, resolved at compile time for the boot banner.
 #[cfg(target_arch = "x86_64")]
@@ -225,6 +227,19 @@ pub fn kmain(boot: &BootInfo) -> ! {
             "keel: irq-handler self-test -> badge {badge:#x} delivered OK"
         ),
         Err(e) => hull::kprintln!("keel: WARNING irq-handler self-test failed: {e:?}"),
+    }
+
+    // First userspace task (x86_64): drop to ring 3 into a tiny program that
+    // issues `int 0x80`, prove the privilege boundary by recovering the value
+    // it traps with, and unwind back into the kernel. This is the live
+    // user/kernel transition the Phase 2 exit criterion is built on; aarch64
+    // EL0 entry and a scheduled task exchanging IPC land in follow-up slices.
+    #[cfg(target_arch = "x86_64")]
+    match userspace::selftest(&mut frames) {
+        Ok(v) => hull::kprintln!(
+            "keel: userspace self-test -> ring3 entered, int 0x80 echo {v:#x} OK"
+        ),
+        Err(e) => hull::kprintln!("keel: WARNING userspace self-test failed: {e:?}"),
     }
 
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");

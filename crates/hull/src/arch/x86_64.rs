@@ -22,9 +22,15 @@ use core::mem::size_of;
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
 const KERNEL_DATA_SELECTOR: u16 = 0x10;
 const TSS_SELECTOR: u16 = 0x18;
+/// Ring-3 user code segment: GDT index 5 (0x28) with RPL 3.
+const USER_CODE_SELECTOR: u16 = 0x28 | 3;
+/// Ring-3 user data/stack segment: GDT index 6 (0x30) with RPL 3.
+const USER_DATA_SELECTOR: u16 = 0x30 | 3;
 
 const IDT_PRESENT: u16 = 1 << 15;
 const IDT_RING0: u16 = 0 << 13;
+/// Gate descriptor privilege level 3: lets `int N` be issued from ring 3.
+const IDT_RING3: u16 = 3 << 13;
 const IDT_INTERRUPT_GATE: u16 = 0xE << 8;
 const IDT_FLAGS: u16 = IDT_PRESENT | IDT_RING0 | IDT_INTERRUPT_GATE;
 
@@ -76,6 +82,19 @@ impl IdtEntry {
         self.offset_high = (addr >> 32) as u32;
         self.reserved = 0;
     }
+
+    /// Like [`set_handler`], but a DPL-3 interrupt gate so the vector can be
+    /// raised by `int N` from ring 3 (used for the userspace syscall trap).
+    /// The handler still runs in ring 0 via the kernel code selector.
+    fn set_handler_user(&mut self, handler: unsafe extern "C" fn()) {
+        let addr = handler as usize as u64;
+        self.offset_low = addr as u16;
+        self.selector = KERNEL_CODE_SELECTOR;
+        self.options = IDT_PRESENT | IDT_RING3 | IDT_INTERRUPT_GATE;
+        self.offset_mid = (addr >> 16) as u16;
+        self.offset_high = (addr >> 32) as u32;
+        self.reserved = 0;
+    }
 }
 
 #[repr(C, packed)]
@@ -108,12 +127,14 @@ struct BootStack([u8; TSS_STACK_SIZE]);
 
 static mut DOUBLE_FAULT_STACK: BootStack = BootStack([0; TSS_STACK_SIZE]);
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
-static mut GDT: [u64; 5] = [
+static mut GDT: [u64; 7] = [
     0x0000_0000_0000_0000, // null
     0x00AF_9A00_0000_FFFF, // kernel code: base=0, limit ignored, long-mode
     0x00AF_9200_0000_FFFF, // kernel data
     0x0000_0000_0000_0000, // TSS low (filled at runtime)
     0x0000_0000_0000_0000, // TSS high
+    0x00AF_FA00_0000_FFFF, // user code (DPL 3, long-mode)
+    0x00AF_F200_0000_FFFF, // user data (DPL 3)
 ];
 static mut IDT: [IdtEntry; 256] = [IdtEntry::missing(); 256];
 
@@ -280,7 +301,7 @@ unsafe fn fill_idt() {
 
 unsafe fn load_gdt() {
     let pointer = DescriptorTablePointer {
-        limit: (size_of::<[u64; 5]>() - 1) as u16,
+        limit: (size_of::<[u64; 7]>() - 1) as u16,
         base: &raw const GDT as u64,
     };
 
@@ -336,6 +357,109 @@ pub unsafe fn set_irq_gate(vector: u8, handler: unsafe extern "C" fn()) {
     // SAFETY: single-core early boot owns the static IDT before interrupts.
     unsafe { IDT[vector as usize].set_handler(handler); }
 }
+
+/// Set the ring-0 stack pointer the CPU loads from the TSS on a privilege
+/// escalation (e.g. an `int 0x80` issued from ring 3). Must point at the top of
+/// a valid, exclusively-owned kernel stack.
+///
+/// # Safety
+/// Must run during single-core early boot before the first ring-3 entry; the
+/// stack must outlive every userspace transition that may use it.
+pub unsafe fn set_kernel_stack(rsp0: u64) {
+    // SAFETY: early boot owns the static TSS before SMP/interrupts.
+    unsafe {
+        TSS.rsp[0] = rsp0;
+    }
+}
+
+/// Install the ring-3 `int vector` syscall trap, routing it to the one-shot
+/// round-trip handler driven by [`enter_user`]. Installed as a DPL-3 interrupt
+/// gate so `int vector` is permitted from ring 3.
+///
+/// # Safety
+/// Must run with interrupts disabled and the IDT loaded; pairs with
+/// [`enter_user`].
+pub unsafe fn install_syscall_gate(vector: u8) {
+    // SAFETY: single-core early boot owns the static IDT before interrupts.
+    unsafe {
+        IDT[vector as usize].set_handler_user(fjord_syscall_isr);
+    }
+}
+
+unsafe extern "C" {
+    fn fjord_enter_user(user_entry: u64, user_stack: u64);
+    fn fjord_syscall_isr();
+}
+
+/// Stashed kernel `rsp` for the [`enter_user`] coroutine: the ring-3 entry
+/// trampoline saves it here, and the syscall handler restores it to unwind
+/// straight back into the caller of [`enter_user`].
+#[no_mangle]
+static mut FJORD_KERNEL_RSP: u64 = 0;
+
+/// Value the ring-3 task passes in `rax` to its `int 0x80`; captured by the
+/// syscall handler and returned by [`enter_user`].
+#[no_mangle]
+static mut FJORD_SYSCALL_ARG: u64 = 0;
+
+/// Drop to ring 3 at `user_entry` on `user_stack`, run until the task issues
+/// `int 0x80`, then return the value it placed in `rax`.
+///
+/// Deliberately one-shot: the syscall handler does not resume the user task but
+/// unwinds back here with the kernel stack and flags intact, so the caller
+/// regains control exactly where it left off. This is the minimal proof of a
+/// working user/kernel privilege boundary (ROADMAP Phase 2); scheduling real
+/// tasks across syscalls is layered on later.
+///
+/// # Safety
+/// Before calling: the syscall gate must be installed ([`install_syscall_gate`]),
+/// `TSS.rsp[0]` must name a valid kernel stack ([`set_kernel_stack`]), and the
+/// code/stack pages at `user_entry`/`user_stack` must be mapped USER-accessible
+/// (code executable, stack writable + non-executable) in the active space.
+pub unsafe fn enter_user(user_entry: u64, user_stack: u64) -> u64 {
+    // SAFETY: the contract above is forwarded to the caller; the trampoline
+    // drops to ring 3 and the int 0x80 gate unwinds back here.
+    unsafe {
+        fjord_enter_user(user_entry, user_stack);
+        core::ptr::read_volatile(&raw const FJORD_SYSCALL_ARG)
+    }
+}
+
+global_asm!(r#"
+.global fjord_enter_user
+fjord_enter_user:
+    // rdi = user entry RIP, rsi = user stack top.
+    // Save kernel callee-saved state + flags, stash rsp, then iretq to ring 3.
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    pushfq
+    mov [rip + FJORD_KERNEL_RSP], rsp
+    push 0x33            // user SS  (GDT index 6 | RPL 3)
+    push rsi             // user RSP (stack top)
+    push 0x202           // RFLAGS: IF=1, reserved bit 1
+    push 0x2b            // user CS  (GDT index 5 | RPL 3)
+    push rdi             // user RIP (entry)
+    iretq
+
+.global fjord_syscall_isr
+fjord_syscall_isr:
+    // Entered from ring 3 via int 0x80 on the TSS.rsp0 stack; rax = argument.
+    // Record it, then unwind straight back into the enter_user caller.
+    mov [rip + FJORD_SYSCALL_ARG], rax
+    mov rsp, [rip + FJORD_KERNEL_RSP]
+    popfq
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+"#);
 
 /// Rust exception entry point called by the assembly common stub.
 #[no_mangle]

@@ -66,6 +66,9 @@ switch driven by the timer IRQ.
 - [x] Tide preemptive switch: the platform timer ISR alone interleaves two non-cooperative worker contexts via a Hull tick hook (`hull::sched_hook`) that Keel registers, proven by `tide::preempt_selftest` (both arches) ✅
 - [x] IRQ delivery as capabilities: `hull::irq_hook` + `keel::irqhandler` — platform timer IRQ delivered to a `Notification` as a badge via an inversion-of-control hook, proven by `irqhandler::selftest` (both arches) ✅
 - [ ] First userspace task launch from Keel
+  - [x] x86_64: live ring-3 round-trip — drop to ring 3 (iretq) into a mapped USER page, trap back via `int 0x80` (DPL-3 gate), recover the argument; proven by `userspace::selftest` 🟢
+  - [ ] aarch64: EL0 entry (`eret` + lower-EL SVC dispatch) 🟡
+  - [ ] real TCB-backed task scheduled by Tide, syscall dispatched over an endpoint 🔴
 - [ ] `Cask` MVP: parse + BLAKE3 Merkle verify (loader path) 🟡
 
 ## Phase 3 — Trust, identity & encryption  (⬜)
