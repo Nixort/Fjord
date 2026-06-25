@@ -138,7 +138,7 @@ __vectors:
     .balign 0x80
     b       exc_halt            // Current EL, SPx:  SError
     .balign 0x80
-    b       exc_halt            // Lower EL, AArch64: Synchronous
+    b       el0_sync            // Lower EL, AArch64: Synchronous -> SVC dispatch
     .balign 0x80
     b       exc_halt            // Lower EL, AArch64: IRQ
     .balign 0x80

@@ -136,3 +136,124 @@ el1_sync:
     mrs     x3, spsr_el1
     b       fjord_aarch64_sync
 "#);
+
+/// Make instructions written to `addr..addr+len` through a *data* mapping
+/// fetchable as code: clean the data cache to the Point of Unification and
+/// invalidate the instruction cache over the range, with the required
+/// barriers. aarch64 I- and D-caches are not coherent, so this is mandatory
+/// before executing freshly-written code (e.g. a user program copied into a
+/// fresh frame).
+///
+/// # Safety
+/// `addr..addr+len` must be a readable, currently-mapped range; the maintenance
+/// ops only publish already-written bytes to the I-side.
+pub unsafe fn sync_instruction_cache(addr: u64, len: usize) {
+    // A 16-byte stride is the architectural minimum cache-line size, so it is
+    // always safe (at worst redundant) regardless of the real line length.
+    let end = addr + len as u64;
+    let base = addr & !15;
+    // SAFETY: cache maintenance by VA over a mapped range; see contract.
+    unsafe {
+        let mut p = base;
+        while p < end {
+            asm!("dc cvau, {p}", p = in(reg) p, options(nostack, preserves_flags));
+            p += 16;
+        }
+        asm!("dsb ish", options(nostack, preserves_flags));
+        let mut p = base;
+        while p < end {
+            asm!("ic ivau, {p}", p = in(reg) p, options(nostack, preserves_flags));
+            p += 16;
+        }
+        asm!("dsb ish", "isb", options(nostack, preserves_flags));
+    }
+}
+
+unsafe extern "C" {
+    /// Drop to EL0 at `user_entry` with `user_stack` in SP_EL0, returning once
+    /// the EL0 program issues `svc #0` and `el0_sync` unwinds the trip.
+    fn fjord_aarch64_enter_user(user_entry: u64, user_stack: u64);
+}
+
+/// Saved EL1 stack pointer across an EL0 excursion; `el0_sync` restores it.
+#[no_mangle]
+static mut FJORD_AARCH64_KERNEL_SP: u64 = 0;
+/// Value the EL0 program leaves in `x0` at `svc #0`, captured by `el0_sync`.
+#[no_mangle]
+static mut FJORD_AARCH64_SVC_ARG: u64 = 0;
+
+/// Drop to EL0, run the user program until it traps via `svc #0`, and return
+/// the value it left in `x0`.
+///
+/// # Safety
+/// `user_entry`/`user_stack` must reference EL0-accessible mappings in the live
+/// address space, and the boot vector table's lower-EL synchronous slot must
+/// route `svc` to `el0_sync` (it does). Single-shot, early-boot use only.
+pub unsafe fn enter_user(user_entry: u64, user_stack: u64) -> u64 {
+    // SAFETY: see contract; the asm trampoline saves/restores all callee-saved
+    // registers plus DAIF and unwinds through `el0_sync`.
+    unsafe {
+        fjord_aarch64_enter_user(user_entry, user_stack);
+        core::ptr::read_volatile(&raw const FJORD_AARCH64_SVC_ARG)
+    }
+}
+
+// EL0 entry trampoline and the lower-EL synchronous-exception handler.
+//
+// `fjord_aarch64_enter_user` stashes the callee-saved registers, the current
+// DAIF mask, and the EL1 stack pointer, then programs SPSR_EL1 (EL0t, DAIF
+// masked — the lower-EL IRQ vector is still `exc_halt`, so EL0 must not take
+// asynchronous exceptions), ELR_EL1 and SP_EL0, and `eret`s to EL0. The EL0
+// program runs and executes `svc #0`, trapping into `el0_sync` (wired from the
+// boot vector table's "Lower EL, AArch64: Synchronous" slot). If the syndrome
+// is an SVC we capture x0, restore DAIF + callee-saved state, and unwind back
+// into `fjord_aarch64_enter_user`'s caller; any other lower-EL synchronous
+// fault falls through to the fatal `el1_sync` reporter for debuggability.
+global_asm!(
+    r#"
+.section .text.vectors, "ax"
+.global fjord_aarch64_enter_user
+fjord_aarch64_enter_user:
+    stp     x19, x20, [sp, #-16]!
+    stp     x21, x22, [sp, #-16]!
+    stp     x23, x24, [sp, #-16]!
+    stp     x25, x26, [sp, #-16]!
+    stp     x27, x28, [sp, #-16]!
+    stp     x29, x30, [sp, #-16]!
+    mrs     x9, daif
+    stp     x9, x9, [sp, #-16]!
+    adrp    x9, FJORD_AARCH64_KERNEL_SP
+    add     x9, x9, #:lo12:FJORD_AARCH64_KERNEL_SP
+    mov     x10, sp
+    str     x10, [x9]
+    msr     sp_el0, x1
+    msr     elr_el1, x0
+    mov     x10, #0x3c0
+    msr     spsr_el1, x10
+    eret
+
+.global el0_sync
+el0_sync:
+    mrs     x9, esr_el1
+    lsr     x10, x9, #26
+    and     x10, x10, #0x3f
+    cmp     x10, #0x15
+    b.ne    el1_sync
+    adrp    x9, FJORD_AARCH64_SVC_ARG
+    add     x9, x9, #:lo12:FJORD_AARCH64_SVC_ARG
+    str     x0, [x9]
+    adrp    x9, FJORD_AARCH64_KERNEL_SP
+    add     x9, x9, #:lo12:FJORD_AARCH64_KERNEL_SP
+    ldr     x10, [x9]
+    mov     sp, x10
+    ldp     x9, x10, [sp], #16
+    msr     daif, x9
+    ldp     x29, x30, [sp], #16
+    ldp     x27, x28, [sp], #16
+    ldp     x25, x26, [sp], #16
+    ldp     x23, x24, [sp], #16
+    ldp     x21, x22, [sp], #16
+    ldp     x19, x20, [sp], #16
+    ret
+"#
+);
