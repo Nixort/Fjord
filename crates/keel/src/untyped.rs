@@ -65,6 +65,18 @@ impl Untyped {
         }
     }
 
+    /// Reconstruct a partially-consumed region with `used_bytes` already
+    /// carved, so a retype watermark can be persisted outside the region (e.g.
+    /// in a capability-table entry) without exposing the internal field.
+    #[must_use]
+    pub const fn resume(base: u64, size_bits: u32, used_bytes: u64) -> Self {
+        Self {
+            base,
+            size_bits,
+            watermark: used_bytes,
+        }
+    }
+
     /// Reconstruct the region described by an `Untyped` capability.
     ///
     /// Returns `None` for a non-untyped capability or an out-of-range size.

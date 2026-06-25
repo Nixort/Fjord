@@ -24,6 +24,7 @@ use hull::mmu::{FrameAllocator, FRAME_SIZE};
 
 pub mod cap;
 pub mod cdt;
+pub mod cte;
 pub mod vspace;
 pub mod ipc;
 pub mod tide;
@@ -101,6 +102,14 @@ pub fn kmain(boot: &BootInfo) -> ! {
     match cdt::selftest() {
         Ok(()) => hull::kprintln!("keel: cdt self-test -> derive/revoke/delete OK"),
         Err(e) => hull::kprintln!("keel: WARNING cdt self-test failed: {e:?}"),
+    }
+
+    // Fused capability-table entries: prove retype-from-untyped, rights-reduced
+    // mint, sibling copy, derivation-preserving move, and recursive revoke all
+    // drive real CSpace slots through a single structure (cap + MDB link).
+    match cte::selftest() {
+        Ok(()) => hull::kprintln!("keel: cte self-test -> retype/mint/revoke OK"),
+        Err(e) => hull::kprintln!("keel: WARNING cte self-test failed: {e:?}"),
     }
 
     match vspace::selftest() {
