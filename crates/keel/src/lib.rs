@@ -117,6 +117,15 @@ pub fn kmain(boot: &BootInfo) -> ! {
         Err(e) => hull::kprintln!("keel: WARNING vspace self-test failed: {e:?}"),
     }
 
+    // VSpace <-> Hull integration: drive real hardware page tables through the
+    // keel vspace bridge, in an inactive scratch address space so the running
+    // kernel's own mapping is left untouched.
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    match vspace::hw_selftest(&mut frames) {
+        Ok(()) => hull::kprintln!("keel: vspace<->hull self-test -> hw map/unmap OK"),
+        Err(e) => hull::kprintln!("keel: WARNING vspace<->hull self-test failed: {e:?}"),
+    }
+
     match ipc::selftest() {
         Ok(()) => hull::kprintln!("keel: ipc self-test -> ntfn/endpoint/vmring OK"),
         Err(e) => hull::kprintln!("keel: WARNING ipc self-test failed: {e:?}"),
