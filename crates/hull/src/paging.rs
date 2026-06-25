@@ -134,6 +134,25 @@ impl Mapper {
         Some(frame)
     }
 
+    /// Like [`ensure_table`](Self::ensure_table) but marks the (existing or
+    /// freshly linked) intermediate entry USER-accessible, so a ring-3 walk is
+    /// permitted through it. Only widen tables that lead exclusively to user
+    /// pages, never tables shared with kernel-only mappings.
+    fn ensure_table_user(
+        table: &mut PageTable,
+        index: usize,
+        alloc: &mut FrameAllocator,
+    ) -> Option<u64> {
+        let entry = table.entries[index];
+        if entry & PRESENT != 0 {
+            table.entries[index] = entry | USER;
+            return Some(entry & ADDR_MASK);
+        }
+        let frame = alloc_zeroed(alloc)?;
+        table.entries[index] = (frame & ADDR_MASK) | PRESENT | WRITABLE | USER;
+        Some(frame)
+    }
+
     /// Map one 4 KiB page `va -> pa` with `leaf_flags` (PRESENT is implied).
     ///
     /// Refuses any leaf that is simultaneously writable and executable, so the
@@ -165,6 +184,44 @@ impl Mapper {
                 None => return false,
             };
             pt.entries[pt_index(va)] = (pa & ADDR_MASK) | leaf_flags | PRESENT;
+        }
+        true
+    }
+
+    /// Map one 4 KiB page `va -> pa` with `leaf_flags`, marking the leaf *and
+    /// every intermediate table* on the path USER-accessible so a ring-3 task
+    /// can reach the page. Upholds W^X exactly like [`map_4k`](Self::map_4k).
+    ///
+    /// `va` should lie in a region not shared with kernel-only mappings, so
+    /// relaxing the intermediate tables to USER cannot widen access to kernel
+    /// pages.
+    pub fn map_user_4k(
+        &mut self,
+        va: u64,
+        pa: u64,
+        leaf_flags: u64,
+        alloc: &mut FrameAllocator,
+    ) -> bool {
+        if leaf_flags & WRITABLE != 0 && leaf_flags & NO_EXECUTE == 0 {
+            return false;
+        }
+        // SAFETY: every table frame is identity-mapped and uniquely owned by
+        // this mapper while we hold `&mut self`.
+        unsafe {
+            let pml4 = PageTable::from_phys(self.pml4);
+            let pdpt = match Self::ensure_table_user(pml4, pml4_index(va), alloc) {
+                Some(p) => PageTable::from_phys(p),
+                None => return false,
+            };
+            let pd = match Self::ensure_table_user(pdpt, pdpt_index(va), alloc) {
+                Some(p) => PageTable::from_phys(p),
+                None => return false,
+            };
+            let pt = match Self::ensure_table_user(pd, pd_index(va), alloc) {
+                Some(p) => PageTable::from_phys(p),
+                None => return false,
+            };
+            pt.entries[pt_index(va)] = (pa & ADDR_MASK) | leaf_flags | PRESENT | USER;
         }
         true
     }
@@ -256,6 +313,47 @@ pub fn map_page(
     alloc: &mut FrameAllocator,
 ) -> bool {
     mapper.map_4k(va, pa, leaf_flags(writable, executable), alloc)
+}
+
+/// Leaf flags for a USER (ring-3-accessible) 4 KiB page.
+const fn user_leaf_flags(writable: bool, executable: bool) -> u64 {
+    leaf_flags(writable, executable) | USER
+}
+
+/// Map one 4 KiB USER page `va -> pa` (ring-3 accessible) into `mapper`,
+/// marking the whole table path USER. W^X is upheld. Returns `false` if refused
+/// or a table frame could not be allocated.
+#[must_use]
+pub fn map_user_page(
+    mapper: &mut Mapper,
+    va: u64,
+    pa: u64,
+    writable: bool,
+    executable: bool,
+    alloc: &mut FrameAllocator,
+) -> bool {
+    mapper.map_user_4k(va, pa, user_leaf_flags(writable, executable), alloc)
+}
+
+/// Physical root (PML4) of the currently active address space, read from CR3.
+#[must_use]
+pub fn active_root() -> u64 {
+    let cr3: u64;
+    // SAFETY: reading CR3 has no side effects.
+    unsafe {
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
+    }
+    cr3 & ADDR_MASK
+}
+
+/// Invalidate the TLB entry for the 4 KiB page containing `va` in the active
+/// address space (e.g. after adding a fresh mapping).
+///
+/// # Safety
+/// Only ever drops a cached translation, forcing a re-walk on next access.
+pub unsafe fn flush_tlb_page(va: u64) {
+    // SAFETY: see the contract and `flush_tlb_4k`.
+    unsafe { flush_tlb_4k(va) }
 }
 
 /// Remove the 4 KiB mapping at `va`, flushing its TLB entry.
