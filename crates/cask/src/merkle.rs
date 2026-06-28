@@ -5,7 +5,7 @@
 //
 // Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 23 june 2026
+// 28 june 2026
 
 //! BLAKE3 Merkle tree over page-sized leaves (fs-verity style).
 //!
