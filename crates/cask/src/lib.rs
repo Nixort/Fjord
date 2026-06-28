@@ -24,6 +24,7 @@
 #![allow(dead_code)]
 extern crate alloc;
 
+pub mod blake3;
 pub mod format;
 pub mod merkle;
 pub mod verify;
