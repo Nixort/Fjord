@@ -307,10 +307,22 @@ mod tests {
             page_size: PAGE,
             page_count: n_pages as u64,
             merkle_root: root,
-            lading: Section { offset: lading_off, len: lading.len() as u64 },
-            body: Section { offset: body_off, len: body.len() as u64 },
-            signature: Section { offset: sig_off, len: signature.len() as u64 },
-            logbook: Section { offset: logbook_off, len: logbook.len() as u64 },
+            lading: Section {
+                offset: lading_off,
+                len: lading.len() as u64,
+            },
+            body: Section {
+                offset: body_off,
+                len: body.len() as u64,
+            },
+            signature: Section {
+                offset: sig_off,
+                len: signature.len() as u64,
+            },
+            logbook: Section {
+                offset: logbook_off,
+                len: logbook.len() as u64,
+            },
         };
 
         let mut image = Vec::new();
@@ -387,10 +399,22 @@ mod tests {
             page_size: PAGE,
             page_count: 0,
             merkle_root: [0u8; 32],
-            lading: Section { offset: HEADER_LEN as u64, len: 0 },
-            body: Section { offset: HEADER_LEN as u64, len: 0 },
-            signature: Section { offset: HEADER_LEN as u64, len: 0 },
-            logbook: Section { offset: HEADER_LEN as u64, len: 0 },
+            lading: Section {
+                offset: HEADER_LEN as u64,
+                len: 0,
+            },
+            body: Section {
+                offset: HEADER_LEN as u64,
+                len: 0,
+            },
+            signature: Section {
+                offset: HEADER_LEN as u64,
+                len: 0,
+            },
+            logbook: Section {
+                offset: HEADER_LEN as u64,
+                len: 0,
+            },
         };
         let image = header.encode().to_vec();
         assert!(matches!(Cask::parse(&image), Err(CaskError::Malformed)));

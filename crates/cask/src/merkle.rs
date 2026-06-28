@@ -104,12 +104,15 @@ pub fn verify_page(index: u64, page: &[u8], proof: &[ProofStep], root: &Hash) ->
             Side::Right => parent_hash(&acc, &step.sibling),
         };
     }
-    constant_time_eq(&acc, root)
+    eq(&acc, root)
 }
 
 /// Compares two digests without a data-dependent early return.
+///
+/// Used for every root/leaf comparison on the trust path so timing cannot leak
+/// how many leading bytes of a forged hash were correct.
 #[must_use]
-fn constant_time_eq(a: &Hash, b: &Hash) -> bool {
+pub fn eq(a: &Hash, b: &Hash) -> bool {
     let mut diff = 0u8;
     for i in 0..blake3::OUT_LEN {
         diff |= a[i] ^ b[i];
