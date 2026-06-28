@@ -5,7 +5,7 @@
 //
 // Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 25 june 2026
+// 28 june 2026
 
 //! First userspace task bring-up: a one-shot unprivileged round-trip.
 //!
@@ -13,17 +13,19 @@
 //! is built on. We carve two physical frames, write a tiny user program into
 //! one, map both into the *live* address space (code R-X, stack RW + NX) with
 //! unprivileged access, then drop to the lowest privilege level and run until
-//! the program traps. The kernel recovers the magic value the program passed
-//! and unwinds back here, proving a complete round-trip across the boundary:
+//! the program traps with an `EXIT` syscall. The kernel recovers the magic the
+//! program passed as the syscall argument, proving a complete round-trip:
 //!
 //! - **x86_64**: `iretq` to ring 3; the program issues `int 0x80` (DPL-3 gate).
 //! - **aarch64**: `eret` to EL0; the program issues `svc #0` (lower-EL vector).
 //!
-//! What this is *not* yet: a scheduled task with its own CSpace/TCB exchanging
-//! IPC over an endpoint. That is the remainder of the Phase 2 exit criterion
-//! and builds on this boundary (see `docs/ROADMAP.md`).
+//! This runs on the same resumable [`hull::user`] path that Keel's multi-task
+//! syscall dispatcher ([`crate::task`]) uses — here exercised for a single
+//! entry and a single trap. A scheduled pair of tasks exchanging IPC over an
+//! endpoint lives in [`crate::task`].
 
 use hull::mmu::FrameAllocator;
+use hull::user::{self, UserFrame};
 
 /// Virtual address the user code page is mapped at. Lives in a translation
 /// subtree the kernel identity map never touches, so making it unprivileged
@@ -35,6 +37,8 @@ const USER_STACK_VA: u64 = 0x80_0000_2000;
 const USER_STACK_TOP: u64 = USER_STACK_VA + 0x1000;
 /// Sentinel the user program passes back; echoed to prove the trip.
 const ECHO_MAGIC: u64 = 0xF70D_CA11;
+/// The `EXIT` syscall number the boundary program traps with (see [`crate::task`]).
+const SYS_EXIT: u64 = 0;
 
 /// Why the userspace round-trip could not be completed.
 #[derive(Debug, Clone, Copy)]
@@ -43,7 +47,8 @@ pub enum UserError {
     OutOfFrames,
     /// A user mapping was refused (W^X violation or no table frame).
     MapFailed,
-    /// The program returned, but with an unexpected value (the value it gave).
+    /// The program trapped, but not with the expected `EXIT(magic)` (the value
+    /// it actually passed).
     BadEcho(u64),
 }
 
@@ -76,93 +81,66 @@ pub fn selftest(frames: &mut FrameAllocator) -> Result<u64, UserError> {
         hull::paging::flush_tlb_page(USER_STACK_VA);
     }
 
-    // Drop to the unprivileged level and run until the program traps; recover
-    // the echoed value.
-    // SAFETY: the entry/stack pages were mapped unprivileged just above, and
-    // `enter` installs any per-arch trap state before the transition.
-    let echoed = unsafe { enter(USER_CODE_VA, USER_STACK_TOP) };
-    if echoed != ECHO_MAGIC {
+    // Install the syscall trap path, then drop to the unprivileged level and run
+    // until the program traps; recover the value it passed.
+    user::init();
+    let mut frame = UserFrame::new(USER_CODE_VA, USER_STACK_TOP);
+    // SAFETY: the entry/stack pages were mapped user-accessible just above, and
+    // `user::init` armed the trap gate / kernel stack.
+    unsafe { user::run(&mut frame) };
+
+    let echoed = frame.arg0();
+    if frame.syscall_nr() != SYS_EXIT || echoed != ECHO_MAGIC {
         return Err(UserError::BadEcho(echoed));
     }
     Ok(echoed)
 }
 
 // ---------------------------------------------------------------------------
-// x86_64: ring 3 via `iretq`, trap back through a DPL-3 `int 0x80` gate.
+// The tiny user program: `EXIT(ECHO_MAGIC)`. Syscall number in rax/x0, the
+// argument in rdi/x1 — the ABI documented in `hull::user`.
 // ---------------------------------------------------------------------------
 
-/// Software-interrupt vector the ring-3 program traps through.
-#[cfg(target_arch = "x86_64")]
-const SYSCALL_VECTOR: u8 = 0x80;
-
-/// Ring-0 stack the CPU switches to on the `int 0x80` privilege escalation.
-#[cfg(target_arch = "x86_64")]
-#[repr(C, align(16))]
-struct SyscallStack([u8; 16 * 1024]);
-#[cfg(target_arch = "x86_64")]
-static mut SYSCALL_STACK: SyscallStack = SyscallStack([0; 16 * 1024]);
-
-/// Write the ring-3 program: `mov eax, MAGIC; int 0x80; jmp $`.
+/// Write the ring-3 program: `xor eax,eax; mov edi,MAGIC; int 0x80; jmp $`.
 #[cfg(target_arch = "x86_64")]
 fn write_user_program(code_pa: u64) {
-    //   B8 11 CA 0D F7   mov eax, 0xF70DCA11   (imm32, little-endian)
-    //   CD 80            int 0x80
-    //   EB FE            jmp $
-    let blob: [u8; 9] = [0xB8, 0x11, 0xCA, 0x0D, 0xF7, 0xCD, 0x80, 0xEB, 0xFE];
+    //   31 C0             xor eax, eax          (rax = 0 = SYS_EXIT)
+    //   BF 11 CA 0D F7    mov edi, 0xF70DCA11   (rdi = magic, zero-extended)
+    //   CD 80             int 0x80
+    //   EB FE             jmp $
+    let blob: [u8; 9] = [0x31, 0xC0, 0xBF, 0x11, 0xCA, 0x0D, 0xF7, 0xCD, 0x80];
     // SAFETY: `code_pa` is a fresh, identity-mapped, writable RAM frame that
     // nothing else references yet; x86 caches are coherent with instruction fetch.
     unsafe {
         core::ptr::copy_nonoverlapping(blob.as_ptr(), code_pa as *mut u8, blob.len());
+        // The `jmp $` lands two bytes on; write it separately to keep the blob
+        // a clean instruction stream.
+        core::ptr::write((code_pa + 9) as *mut u8, 0xEB);
+        core::ptr::write((code_pa + 10) as *mut u8, 0xFE);
     }
 }
 
-/// Prepare the trap path (kernel stack + DPL-3 gate), then drop to ring 3 and
-/// return the value the program traps with.
-///
-/// # Safety
-/// The entry/stack pages must be mapped USER-accessible; single-shot early-boot
-/// use before SMP.
-#[cfg(target_arch = "x86_64")]
-unsafe fn enter(entry: u64, stack: u64) -> u64 {
-    // SAFETY: single-core early boot; SYSCALL_STACK outlives the transition and
-    // the gate pairs with the `int 0x80` in the user program.
-    unsafe {
-        let base = &raw const SYSCALL_STACK as *const u8;
-        let kstack_top = base.add(core::mem::size_of::<SyscallStack>()) as u64;
-        hull::arch::x86_64::set_kernel_stack(kstack_top);
-        hull::arch::x86_64::install_syscall_gate(SYSCALL_VECTOR);
-        hull::arch::x86_64::enter_user(entry, stack)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// aarch64: EL0 via `eret`, trap back through the lower-EL `svc #0` vector.
-// ---------------------------------------------------------------------------
-
-/// Write the EL0 program: `movz w0,#0xCA11; movk w0,#0xF70D,lsl#16; svc #0; b .`
-/// then publish it to the instruction side (aarch64 is not I/D coherent).
+/// Write the EL0 program: `mov x0,#0; movz w1,#0xCA11; movk w1,#0xF70D,lsl#16;
+/// svc #0; b .` then publish it to the instruction side (aarch64 is not I/D
+/// coherent).
 #[cfg(target_arch = "aarch64")]
 fn write_user_program(code_pa: u64) {
-    //   52994220   movz w0, #0xCA11
-    //   72BEE1A0   movk w0, #0xF70D, lsl #16   (w0 = 0xF70DCA11)
+    //   D2800000   mov  x0, #0                 (x0 = SYS_EXIT)
+    //   52994221   movz w1, #0xCA11
+    //   72BEE1A1   movk w1, #0xF70D, lsl #16   (x1 = 0xF70DCA11)
     //   D4000001   svc  #0
-    //   14000000   b    .                      (well-formed if ever resumed)
-    let blob: [u32; 4] = [0x5299_4220, 0x72BE_E1A0, 0xD400_0001, 0x1400_0000];
+    //   14000000   b    .
+    let blob: [u32; 5] = [
+        0xD280_0000,
+        0x5299_4221,
+        0x72BE_E1A1,
+        0xD400_0001,
+        0x1400_0000,
+    ];
     // SAFETY: `code_pa` is a fresh, identity-mapped, writable RAM frame; the
     // cache maintenance publishes the bytes for the EL0 instruction fetch.
     unsafe {
         core::ptr::copy_nonoverlapping(blob.as_ptr(), code_pa as *mut u32, blob.len());
         hull::arch::aarch64::sync_instruction_cache(code_pa, core::mem::size_of_val(&blob));
     }
-}
-
-/// Drop to EL0 and return the value the program traps with via `svc #0`.
-///
-/// # Safety
-/// The entry/stack pages must be mapped EL0-accessible; the boot vector table
-/// routes the EL0 `svc` to `el0_sync`. Single-shot early-boot use.
-#[cfg(target_arch = "aarch64")]
-unsafe fn enter(entry: u64, stack: u64) -> u64 {
-    // SAFETY: see contract; the trampoline saves/restores callee-saved state.
-    unsafe { hull::arch::aarch64::enter_user(entry, stack) }
 }

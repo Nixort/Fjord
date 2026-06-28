@@ -15,25 +15,27 @@
 #![no_std]
 #![allow(dead_code)]
 
+#[cfg(target_arch = "x86_64")]
+pub mod apic;
 pub mod arch;
 pub mod boot;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub mod context;
+#[cfg(target_arch = "aarch64")]
+pub mod gic;
+pub mod irq;
+pub mod irq_hook;
 pub mod mmu;
 #[cfg(target_arch = "x86_64")]
 pub mod paging;
 #[cfg(target_arch = "aarch64")]
 #[path = "paging_aarch64.rs"]
 pub mod paging;
-pub mod irq;
 pub mod sched_hook;
-pub mod irq_hook;
-pub mod timer;
 pub mod serial;
+pub mod timer;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-pub mod context;
-#[cfg(target_arch = "x86_64")]
-pub mod apic;
-#[cfg(target_arch = "aarch64")]
-pub mod gic;
+pub mod user;
 
 /// Earliest platform bring-up: called before Keel.
 ///

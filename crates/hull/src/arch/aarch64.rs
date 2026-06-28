@@ -117,7 +117,11 @@ fn halt_forever() -> ! {
         // SAFETY: mask DAIF and `wfe`; the architectural low-power wait parks
         // the core until an (already-masked) event, so it idles here.
         unsafe {
-            asm!("msr daifset, #0xf", "wfe", options(nomem, nostack, preserves_flags));
+            asm!(
+                "msr daifset, #0xf",
+                "wfe",
+                options(nomem, nostack, preserves_flags)
+            );
         }
     }
 }
@@ -126,7 +130,8 @@ fn halt_forever() -> ! {
 // table's "Current EL" synchronous slots. The handler never returns, so it
 // reads the syndrome registers straight into the AAPCS argument registers and
 // tail-calls the Rust dispatcher on the active EL1 stack.
-global_asm!(r#"
+global_asm!(
+    r#"
 .section .text.vectors, "ax"
 .global el1_sync
 el1_sync:
@@ -135,7 +140,8 @@ el1_sync:
     mrs     x2, elr_el1
     mrs     x3, spsr_el1
     b       fjord_aarch64_sync
-"#);
+"#
+);
 
 /// Make instructions written to `addr..addr+len` through a *data* mapping
 /// fetchable as code: clean the data cache to the Point of Unification and
@@ -169,51 +175,119 @@ pub unsafe fn sync_instruction_cache(addr: u64, len: usize) {
     }
 }
 
+use core::mem::offset_of;
+
+/// A resumable EL0 register frame: everything needed to (re)enter a user task
+/// exactly where it last trapped. [`user_run`] `eret`s to EL0 from this frame;
+/// the `svc #0` handler saves the live EL0 state back into it.
+///
+/// The kernel treats it as a coroutine resume point. The syscall ABI carries
+/// the number in `x0`, arguments in `x1`/`x2`, and the return value back in `x0`
+/// (see `crate::user`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UserFrame {
+    /// General registers `x0..=x30`.
+    x: [u64; 31],
+    /// `SP_EL0` — the EL0 stack pointer.
+    sp: u64,
+    /// `ELR_EL1` — the EL0 PC to resume at.
+    elr: u64,
+    /// `SPSR_EL1` — the saved EL0 processor state.
+    spsr: u64,
+}
+
+// The assembly addresses these fields by byte offset; the checks fail the build
+// before boot if the layout ever drifts.
+const _: () = assert!(offset_of!(UserFrame, x) == 0x00);
+const _: () = assert!(offset_of!(UserFrame, sp) == 0xF8);
+const _: () = assert!(offset_of!(UserFrame, elr) == 0x100);
+const _: () = assert!(offset_of!(UserFrame, spsr) == 0x108);
+
+/// `SPSR_EL1` value for entering EL0t with DAIF masked (the lower-EL IRQ vector
+/// is still the fatal reporter, so EL0 must not take asynchronous exceptions).
+const SPSR_EL0T_MASKED: u64 = 0x3c0;
+
+impl UserFrame {
+    /// A fresh frame that, on the first [`user_run`], begins executing at
+    /// `entry` with `SP_EL0 = stack`, EL0t, DAIF masked, and all GPRs zeroed.
+    #[must_use]
+    pub const fn new(entry: u64, stack: u64) -> Self {
+        Self {
+            x: [0; 31],
+            sp: stack,
+            elr: entry,
+            spsr: SPSR_EL0T_MASKED,
+        }
+    }
+
+    /// The syscall number the task trapped with (`x0`).
+    #[must_use]
+    pub const fn syscall_nr(&self) -> u64 {
+        self.x[0]
+    }
+
+    /// The first syscall argument (`x1`).
+    #[must_use]
+    pub const fn arg0(&self) -> u64 {
+        self.x[1]
+    }
+
+    /// The second syscall argument (`x2`).
+    #[must_use]
+    pub const fn arg1(&self) -> u64 {
+        self.x[2]
+    }
+
+    /// Set the value the resumed task sees as its syscall return (`x0`).
+    pub fn set_ret(&mut self, value: u64) {
+        self.x[0] = value;
+    }
+}
+
 unsafe extern "C" {
-    /// Drop to EL0 at `user_entry` with `user_stack` in SP_EL0, returning once
-    /// the EL0 program issues `svc #0` and `el0_sync` unwinds the trip.
-    fn fjord_aarch64_enter_user(user_entry: u64, user_stack: u64);
+    fn fjord_aarch64_user_run(frame: *mut UserFrame);
 }
 
 /// Saved EL1 stack pointer across an EL0 excursion; `el0_sync` restores it.
 #[no_mangle]
 static mut FJORD_AARCH64_KERNEL_SP: u64 = 0;
-/// Value the EL0 program leaves in `x0` at `svc #0`, captured by `el0_sync`.
+/// Pointer to the [`UserFrame`] of the task currently at EL0; `el0_sync` saves
+/// the trapping register state through it.
 #[no_mangle]
-static mut FJORD_AARCH64_SVC_ARG: u64 = 0;
+static mut FJORD_AARCH64_CURRENT_FRAME: u64 = 0;
 
-/// Drop to EL0, run the user program until it traps via `svc #0`, and return
-/// the value it left in `x0`.
+/// Drop to EL0 from `frame` and run until the task issues `svc #0`, which saves
+/// the live EL0 state back into `*frame` and returns here. Works for both the
+/// first entry and every resume — the frame fully describes the (re)entry point.
 ///
 /// # Safety
-/// `user_entry`/`user_stack` must reference EL0-accessible mappings in the live
+/// `frame`'s code/stack must reference EL0-accessible mappings in the live
 /// address space, and the boot vector table's lower-EL synchronous slot must
-/// route `svc` to `el0_sync` (it does). Single-shot, early-boot use only.
-pub unsafe fn enter_user(user_entry: u64, user_stack: u64) -> u64 {
-    // SAFETY: see contract; the asm trampoline saves/restores all callee-saved
-    // registers plus DAIF and unwinds through `el0_sync`.
-    unsafe {
-        fjord_aarch64_enter_user(user_entry, user_stack);
-        core::ptr::read_volatile(&raw const FJORD_AARCH64_SVC_ARG)
-    }
+/// route `svc` to `el0_sync` (it does). `frame` must outlive the call.
+pub unsafe fn user_run(frame: *mut UserFrame) {
+    // SAFETY: see contract; the trampoline saves/restores all callee-saved
+    // registers plus DAIF and unwinds through `el0_sync`, having written the
+    // trapping state into `*frame`.
+    unsafe { fjord_aarch64_user_run(frame) }
 }
 
 // EL0 entry trampoline and the lower-EL synchronous-exception handler.
 //
-// `fjord_aarch64_enter_user` stashes the callee-saved registers, the current
-// DAIF mask, and the EL1 stack pointer, then programs SPSR_EL1 (EL0t, DAIF
-// masked — the lower-EL IRQ vector is still `exc_halt`, so EL0 must not take
-// asynchronous exceptions), ELR_EL1 and SP_EL0, and `eret`s to EL0. The EL0
-// program runs and executes `svc #0`, trapping into `el0_sync` (wired from the
-// boot vector table's "Lower EL, AArch64: Synchronous" slot). If the syndrome
-// is an SVC we capture x0, restore DAIF + callee-saved state, and unwind back
-// into `fjord_aarch64_enter_user`'s caller; any other lower-EL synchronous
-// fault falls through to the fatal `el1_sync` reporter for debuggability.
+// `fjord_aarch64_user_run` stashes the callee-saved registers, the current DAIF
+// mask, and the EL1 stack pointer, records the frame pointer, then programs
+// SP_EL0, ELR_EL1 and SPSR_EL1 from the frame, loads the user GPRs and `eret`s
+// to EL0. The EL0 program runs and executes `svc #0`, trapping into `el0_sync`
+// (wired from the boot vector table's "Lower EL, AArch64: Synchronous" slot).
+// If the syndrome is an SVC we save the full EL0 register state into the current
+// frame, restore DAIF + callee-saved state, and unwind back into the
+// `fjord_aarch64_user_run` caller; any other lower-EL synchronous fault falls
+// through to the fatal `el1_sync` reporter for debuggability.
 global_asm!(
     r#"
 .section .text.vectors, "ax"
-.global fjord_aarch64_enter_user
-fjord_aarch64_enter_user:
+.global fjord_aarch64_user_run
+fjord_aarch64_user_run:
     stp     x19, x20, [sp, #-16]!
     stp     x21, x22, [sp, #-16]!
     stp     x23, x24, [sp, #-16]!
@@ -222,26 +296,82 @@ fjord_aarch64_enter_user:
     stp     x29, x30, [sp, #-16]!
     mrs     x9, daif
     stp     x9, x9, [sp, #-16]!
-    adrp    x9, FJORD_AARCH64_KERNEL_SP
-    add     x9, x9, #:lo12:FJORD_AARCH64_KERNEL_SP
-    mov     x10, sp
-    str     x10, [x9]
-    msr     sp_el0, x1
-    msr     elr_el1, x0
-    mov     x10, #0x3c0
-    msr     spsr_el1, x10
+    adrp    x10, FJORD_AARCH64_KERNEL_SP
+    add     x10, x10, #:lo12:FJORD_AARCH64_KERNEL_SP
+    mov     x11, sp
+    str     x11, [x10]
+    adrp    x10, FJORD_AARCH64_CURRENT_FRAME
+    add     x10, x10, #:lo12:FJORD_AARCH64_CURRENT_FRAME
+    str     x0, [x10]
+    // Program the EL0 return state from the frame.
+    ldr     x9, [x0, #0xF8]
+    msr     sp_el0, x9
+    ldr     x9, [x0, #0x100]
+    msr     elr_el1, x9
+    ldr     x9, [x0, #0x108]
+    msr     spsr_el1, x9
+    // Load the user GPRs (x0 last, since it is the base pointer).
+    ldp     x1, x2,   [x0, #0x08]
+    ldp     x3, x4,   [x0, #0x18]
+    ldp     x5, x6,   [x0, #0x28]
+    ldp     x7, x8,   [x0, #0x38]
+    ldp     x9, x10,  [x0, #0x48]
+    ldp     x11, x12, [x0, #0x58]
+    ldp     x13, x14, [x0, #0x68]
+    ldp     x15, x16, [x0, #0x78]
+    ldp     x17, x18, [x0, #0x88]
+    ldp     x19, x20, [x0, #0x98]
+    ldp     x21, x22, [x0, #0xA8]
+    ldp     x23, x24, [x0, #0xB8]
+    ldp     x25, x26, [x0, #0xC8]
+    ldp     x27, x28, [x0, #0xD8]
+    ldp     x29, x30, [x0, #0xE8]
+    ldr     x0, [x0, #0x00]
     eret
 
 .global el0_sync
 el0_sync:
+    // Running at EL1 on the kernel stack. Free x9/x10 as scratch (saving the
+    // user values), then dispatch on the exception class.
+    stp     x9, x10, [sp, #-16]!
     mrs     x9, esr_el1
     lsr     x10, x9, #26
     and     x10, x10, #0x3f
-    cmp     x10, #0x15
-    b.ne    el1_sync
-    adrp    x9, FJORD_AARCH64_SVC_ARG
-    add     x9, x9, #:lo12:FJORD_AARCH64_SVC_ARG
-    str     x0, [x9]
+    cmp     x10, #0x15                  // EC == SVC (AArch64)?
+    b.ne    2f
+    // Save the full EL0 register state into the current frame.
+    adrp    x9, FJORD_AARCH64_CURRENT_FRAME
+    add     x9, x9, #:lo12:FJORD_AARCH64_CURRENT_FRAME
+    ldr     x9, [x9]
+    stp     x0, x1,   [x9, #0x00]
+    stp     x2, x3,   [x9, #0x10]
+    stp     x4, x5,   [x9, #0x20]
+    stp     x6, x7,   [x9, #0x30]
+    str     x8,       [x9, #0x40]
+    str     x11,      [x9, #0x58]
+    stp     x12, x13, [x9, #0x60]
+    stp     x14, x15, [x9, #0x70]
+    stp     x16, x17, [x9, #0x80]
+    stp     x18, x19, [x9, #0x90]
+    stp     x20, x21, [x9, #0xA0]
+    stp     x22, x23, [x9, #0xB0]
+    stp     x24, x25, [x9, #0xC0]
+    stp     x26, x27, [x9, #0xD0]
+    stp     x28, x29, [x9, #0xE0]
+    str     x30,      [x9, #0xF0]
+    // Recover the user x9/x10 stashed on the kernel stack and store them.
+    ldp     x0, x1, [sp]
+    str     x0, [x9, #0x48]
+    str     x1, [x9, #0x50]
+    // System registers: SP_EL0, ELR_EL1 (PC after svc), SPSR_EL1.
+    mrs     x0, sp_el0
+    str     x0, [x9, #0xF8]
+    mrs     x0, elr_el1
+    str     x0, [x9, #0x100]
+    mrs     x0, spsr_el1
+    str     x0, [x9, #0x108]
+    add     sp, sp, #16                 // drop the scratch slot
+    // Restore kernel callee-saved state and unwind to the user_run caller.
     adrp    x9, FJORD_AARCH64_KERNEL_SP
     add     x9, x9, #:lo12:FJORD_AARCH64_KERNEL_SP
     ldr     x10, [x9]
@@ -255,5 +385,8 @@ el0_sync:
     ldp     x21, x22, [sp], #16
     ldp     x19, x20, [sp], #16
     ret
+2:
+    add     sp, sp, #16                 // drop the scratch slot before the fatal path
+    b       el1_sync
 "#
 );
