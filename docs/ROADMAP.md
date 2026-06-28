@@ -69,7 +69,7 @@ switch driven by the timer IRQ.
   - [x] x86_64: live ring-3 round-trip — drop to ring 3 (iretq) into a mapped USER page, trap back via `int 0x80` (DPL-3 gate), recover the argument; proven by `userspace::selftest` 🟢
   - [x] aarch64: EL0 entry — drop to EL0 (`eret`) into a mapped EL0 page, trap back via `svc #0` (lower-EL synchronous vector), recover the argument; proven by `userspace::selftest` 🟢
   - [ ] real TCB-backed task scheduled by Tide, syscall dispatched over an endpoint 🔴
-- [ ] `Cask` MVP: parse + BLAKE3 Merkle verify (loader path) 🟡
+- [x] `Cask` MVP: parse + BLAKE3 Merkle verify (loader path) — in-tree heap-free BLAKE3 (`cask::blake3`, pinned to upstream KATs), an fs-verity-style Merkle tree with allocation-free lazy page proofs (`cask::merkle`), a zero-copy bounds-checked container parser (`cask::format`), and the parse+integrity pipeline with a heap-free `selftest()` (`cask::verify`). Signature/rollback/Logbook gates follow in Phase 3. ✅
 
 ## Phase 3 — Trust, identity & encryption  (⬜)
 

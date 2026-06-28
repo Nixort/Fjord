@@ -45,9 +45,10 @@ switches, hardware interrupts are delivered as capability-backed notifications
 and at boot the kernel now stands up its root capability space by retyping the
 initial task's first objects (four pages + a TCB) straight out of a real untyped
 region reserved from physical RAM (`cte::bootstrap_root`). Twelve boot-time
-self-tests pass on both targets. Phase 2 is *not* finished: launching the first
-userspace task (the phase exit criterion) and the `Cask` MVP (parse + BLAKE3
-Merkle verify) remain, tracked in `docs/ROADMAP.md`.
+self-tests pass on both targets. The `Cask` MVP — parse + BLAKE3 Merkle verify
+on the loader path — is now in tree (`crates/cask`; see §5). Phase 2 is *not*
+finished: launching the first real TCB-backed userspace task scheduled by Tide
+(the phase exit criterion) remains, tracked in `docs/ROADMAP.md`.
 
 ## 2. Hull — hardware abstraction layer
 
@@ -85,6 +86,17 @@ A `.cask` is a tamper-evident container (see `crates/cask`):
 - **Anti-rollback:** a monotonic version counter checked against TPM NV / RPMB.
 - **Transparency:** the signature must appear in `Logbook` with an inclusion
   proof, enabling detection and revocation.
+
+**Implementation status (v0.0.2).** The integrity half is in tree and heap-free:
+a from-scratch BLAKE3 (`cask::blake3`, pinned to the upstream known-answer
+vectors), an fs-verity-style Merkle tree whose root is sealed in the header
+(`cask::merkle`), a zero-copy, strictly bounds-checked container parser
+(`cask::format`), and the verification pipeline (`cask::verify`) exposing both
+the eager whole-image check and the loader's allocation-free lazy
+`verify_page` on a fault. Authenticity (hybrid signatures), anti-rollback, and
+`Logbook` transparency are deliberately *absent* (not stubbed to succeed) until
+`anchor`/`harbormaster`/`logbook` land in Phase 3, where Helm composes them
+ahead of integrity.
 
 ## 6. Brine — disk encryption
 
