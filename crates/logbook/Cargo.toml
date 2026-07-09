@@ -19,3 +19,4 @@ description = "Fjord OS component: logbook"
 workspace = true
 
 [dependencies]
+cask = { path = "../cask" }
