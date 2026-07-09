@@ -47,8 +47,7 @@ pub fn platform_init() -> ! {
     let mut console = serial::Serial::init();
     let _ = core::fmt::Write::write_str(
         &mut console,
-        "fjord: generic Hull platform_init fallback; parking CPU
-",
+        "fjord: generic Hull platform_init fallback; parking CPU\n",
     );
     loop {
         core::hint::spin_loop();
