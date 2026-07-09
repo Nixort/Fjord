@@ -15,8 +15,8 @@
 //! the smallest primitive needed to make a multi-byte console write atomic with
 //! respect to the timer ISR, and to fence a cooperative context switch.
 //!
-//! TODO(hull): controller-level mask/unmask, EOI, and routing IRQs to userspace
-//! driver capabilities.
+//! Future slices add controller-level mask/unmask, EOI, and routing IRQs to
+//! userspace driver capabilities.
 
 /// An RAII critical section: interrupt delivery is masked on the current CPU
 /// for as long as the guard is alive, then restored to its previous state.

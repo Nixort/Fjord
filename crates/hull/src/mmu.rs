@@ -14,8 +14,8 @@
 //! exists so the kernel can obtain backing physical frames (page tables, the
 //! heap arena) before a real allocator or paging code is in place.
 //!
-//! TODO(hull): page-table walk/modify, higher-half mapping, W^X enforcement,
-//! TLB shootdown and frame recycling once Keel owns the vspace.
+//! Future slices add page-table walk/modify, higher-half mapping, W^X
+//! enforcement, TLB shootdown and frame recycling once Keel owns the vspace.
 
 use crate::boot::BootInfo;
 
