@@ -208,23 +208,35 @@ impl<'slots> CSpace<'slots> {
         // Resume from however much of this region was carved before.
         let mut region = Untyped::resume(entry.cap.object(), size_bits, entry.watermark);
 
+        let end_index = start_index.checked_add(count).ok_or(CteError::OutOfRange)?;
+        if end_index > self.slots.len() {
+            return Err(CteError::OutOfRange);
+        }
+
         // Validate every destination slot up front so a bad index is rejected
         // before any physical memory is committed.
-        for i in 0..count {
-            let dest = start_index + i;
-            let slot = self.slots.get(dest).ok_or(CteError::OutOfRange)?;
-            if slot.used {
+        for dest in start_index..end_index {
+            if self.slots[dest].used {
                 return Err(CteError::SlotOccupied);
             }
         }
 
+        // Probe all carving first. This preserves the capability invariant that
+        // a failed retype creates neither child caps nor leaked watermark state.
+        let mut probe = region;
+        for _ in 0..count {
+            probe.retype_one(obj_type, obj_size_bits, rights)?;
+        }
+
+        let mut commit = region;
         for i in 0..count {
-            let child = region.retype_one(obj_type, obj_size_bits, rights)?;
+            let child = commit.retype_one(obj_type, obj_size_bits, rights)?;
             self.install(start_index + i, child, Some(ut), 0)?;
         }
 
-        // Persist the advanced watermark back into the untyped entry.
-        self.slots[ut].watermark = region.used_bytes();
+        // Persist the advanced watermark back into the untyped entry only after
+        // all children have been installed successfully.
+        self.slots[ut].watermark = commit.used_bytes();
         Ok(())
     }
 
