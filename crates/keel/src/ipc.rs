@@ -212,7 +212,7 @@ impl<'q> Endpoint<'q> {
 
     fn enqueue(&mut self, waiter: Waiter) -> Result<(), IpcError> {
         let cap = self.queue.len();
-        if self.len >= cap {
+        if cap == 0 || self.len >= cap {
             return Err(IpcError::QueueFull);
         }
         let slot = (self.head + self.len) % cap;
@@ -303,16 +303,22 @@ impl VmRing {
         }
     }
 
+    /// Number of slots managed by this ring.
+    #[must_use]
+    pub const fn capacity(self) -> usize {
+        self.capacity
+    }
+
     /// Whether the ring holds no entries.
     #[must_use]
     pub const fn is_empty(self) -> bool {
-        !self.full && self.head == self.tail
+        self.capacity == 0 || (!self.full && self.head == self.tail)
     }
 
     /// Whether the ring is full.
     #[must_use]
     pub const fn is_full(self) -> bool {
-        self.full
+        self.capacity != 0 && self.full
     }
 
     /// Number of occupied slots.
@@ -330,7 +336,7 @@ impl VmRing {
     /// Reserve the next producer slot index, advancing the tail.
     /// Returns `None` if the ring is full.
     pub fn push(&mut self) -> Option<usize> {
-        if self.full {
+        if self.capacity == 0 || self.full {
             return None;
         }
         let slot = self.tail;
@@ -391,6 +397,13 @@ pub fn selftest() -> Result<(), IpcError> {
         return Err(IpcError::QueueFull);
     }
 
+
+    let mut zero_ep_storage: [Waiter; 0] = [];
+    let mut zero_ep = Endpoint::new(&mut zero_ep_storage);
+    if !matches!(zero_ep.send(1, Message::empty()), Err(IpcError::QueueFull)) {
+        return Err(IpcError::QueueFull);
+    }
+
     // Now sender-first: sender blocks, receiver completes it.
     if ep.send(11, msg)? != IpcResult::Queued {
         return Err(IpcError::QueueFull);
@@ -405,6 +418,12 @@ pub fn selftest() -> Result<(), IpcError> {
     }
 
     // --- VmRing: fill, detect full, drain, detect empty (FIFO order). ---
+
+    let mut zero = VmRing::new(0);
+    if zero.capacity() != 0 || !zero.is_empty() || zero.is_full() || zero.push().is_some() || zero.pop().is_some() {
+        return Err(IpcError::QueueFull);
+    }
+
     let mut ring = VmRing::new(3);
     if !ring.is_empty() {
         return Err(IpcError::QueueFull);
