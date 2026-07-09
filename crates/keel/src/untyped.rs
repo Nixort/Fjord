@@ -167,11 +167,37 @@ impl Untyped {
         dest: &mut CNode<'_>,
         start_index: usize,
     ) -> Result<(), RetypeError> {
+        let end_index = start_index
+            .checked_add(count)
+            .ok_or(RetypeError::Cspace(CapError::OutOfRange))?;
+        if end_index > dest.capacity() {
+            return Err(RetypeError::Cspace(CapError::OutOfRange));
+        }
+
+        // Validate destination slots before moving the watermark. Retype must
+        // be atomic from the caller's point of view: a bad CSpace request must
+        // not consume physical memory.
+        for i in start_index..end_index {
+            if !dest.get(i).map_err(RetypeError::Cspace)?.is_null() {
+                return Err(RetypeError::Cspace(CapError::SlotOccupied));
+            }
+        }
+
+        // Probe the exact carving sequence against a copy. Only after every
+        // object fits do we commit capabilities into the destination CNode and
+        // publish the advanced watermark.
+        let mut probe = *self;
+        for _ in 0..count {
+            probe.retype_one(obj_type, obj_size_bits, rights)?;
+        }
+
+        let mut commit = *self;
         for i in 0..count {
-            let cap = self.retype_one(obj_type, obj_size_bits, rights)?;
+            let cap = commit.retype_one(obj_type, obj_size_bits, rights)?;
             dest.insert(start_index + i, cap)
                 .map_err(RetypeError::Cspace)?;
         }
+        *self = commit;
         Ok(())
     }
 }
@@ -211,6 +237,19 @@ pub fn selftest() -> Result<(), RetypeError> {
 
     // Accounting: exactly three pages have been consumed.
     if ut.used_bytes() != 3 * page_size {
+        return Err(RetypeError::OutOfSpace);
+    }
+
+
+    // Atomicity: a bad destination range must not advance the watermark.
+    let mut tiny_storage = [Capability::NULL; 1];
+    let mut tiny = CNode::new(&mut tiny_storage);
+    let before = ut.used_bytes();
+    if !matches!(
+        ut.retype_into(CapType::Page, PAGE_BITS, 2, rw, &mut tiny, 0),
+        Err(RetypeError::Cspace(CapError::OutOfRange))
+    ) || ut.used_bytes() != before
+    {
         return Err(RetypeError::OutOfSpace);
     }
 
