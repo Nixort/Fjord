@@ -254,7 +254,7 @@ impl Mapper {
         if leaf_flags & WRITABLE != 0 && leaf_flags & NO_EXECUTE == 0 {
             return false;
         }
-        if va & (HUGE_FRAME_SIZE - 1) != 0 || pa & (HUGE_FRAME_SIZE - 1) != 0 {
+        if va & (HUGE_PAGE_SIZE - 1) != 0 || pa & (HUGE_PAGE_SIZE - 1) != 0 {
             return false;
         }
         // SAFETY: see `map_4k`.
