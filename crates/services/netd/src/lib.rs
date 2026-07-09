@@ -15,8 +15,31 @@
 #![allow(dead_code)]
 extern crate alloc;
 
+/// Runtime state exposed to Helm health checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceState {
+    /// Service has initialized and is accepting messages.
+    Ready,
+    /// Service parked because the IPC transport is not available yet.
+    Parked,
+}
+
+/// Returns the static service name used by Helm supervision.
+#[must_use]
+pub const fn service_name() -> &'static str {
+    "netd"
+}
+
+/// Returns the static role description used in diagnostics.
+#[must_use]
+pub const fn service_role() -> &'static str {
+    "network stack"
+}
+
 /// Service entry point; driven by the async runtime.
-/// TODO(netd): handle requests over its IPC endpoint.
 pub fn run() -> ! {
-    todo!("netd service loop")
+    let _state = ServiceState::Parked;
+    loop {
+        core::hint::spin_loop();
+    }
 }
