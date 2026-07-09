@@ -37,10 +37,16 @@ pub mod timer;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 pub mod user;
 
-/// Earliest platform bring-up: called before Keel.
+/// Earliest platform bring-up fallback.
 ///
-/// TODO(hull): discover memory map, set up early console, enable the MMU,
-/// then jump to [`keel::kmain`].
+/// The real boot path enters `keel::kmain` from the architecture shim after it
+/// has collected boot information. If a platform accidentally calls this generic
+/// fallback, fail closed: emit a clear marker and park instead of pretending that
+/// memory discovery or MMU setup succeeded.
 pub fn platform_init() -> ! {
-    todo!("Hull platform bring-up — ROADMAP Phase 1")
+    serial::write_str("fjord: generic Hull platform_init fallback; parking CPU
+");
+    loop {
+        core::hint::spin_loop();
+    }
 }
