@@ -19,3 +19,5 @@ description = "Fjord OS component: helm"
 workspace = true
 
 [dependencies]
+cask = { path = "../cask" }
+logbook = { path = "../logbook" }

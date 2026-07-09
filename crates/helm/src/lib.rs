@@ -23,8 +23,12 @@ pub mod launch;
 
 /// Helm entry point, started by Keel with the root capability set.
 ///
-/// TODO(helm): bring up cryptd/timed/storaged/vfs/netd in dependency order,
-/// then enter the supervision loop.
+/// The dependency order and backoff state machine are implemented in
+/// [`supervise`]. Real service spawning still requires the Keel userspace task
+/// creation ABI, so this generic entry parks fail-closed after initialization.
 pub fn main() -> ! {
-    todo!("Helm init + supervision loop — ROADMAP Phase 2/3")
+    let _boot_order = supervise::BOOT_ORDER;
+    loop {
+        core::hint::spin_loop();
+    }
 }
