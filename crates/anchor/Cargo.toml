@@ -19,3 +19,4 @@ description = "Fjord OS component: anchor"
 workspace = true
 
 [dependencies]
+cask = { path = "../cask" }

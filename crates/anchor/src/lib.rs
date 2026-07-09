@@ -19,9 +19,13 @@
 pub mod measure;
 pub mod seal;
 
-/// Measure the next stage, extend the PCR, then transfer control.
+/// Fail-closed placeholder for a platform-specific measured handoff.
 ///
-/// TODO(anchor): hash image with BLAKE3, `TPM2_PCR_Extend`, derive next CDI.
+/// Generic Anchor code can measure, extend, derive CDI, and authorize sealed
+/// handles. Actually transferring control is board/firmware-specific, so the
+/// generic entry parks instead of launching an unmeasured next stage.
 pub fn measure_and_launch_next() -> ! {
-    todo!("measured boot handoff — ROADMAP Phase 3")
+    loop {
+        core::hint::spin_loop();
+    }
 }
