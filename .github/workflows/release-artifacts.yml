@@ -1,0 +1,70 @@
+name: Release artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-artifacts-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NIGHTLY: nightly-2026-06-01
+
+jobs:
+  build-kernel-artifacts:
+    name: Build kernel artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache cargo state
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml', 'boot/**', 'crates/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      - name: Build release x86_64 ELF
+        run: cargo +${{ env.NIGHTLY }} build -Zjson-target-spec -p boot --release --target boot/x86_64-fjord.json
+
+      - name: Build release aarch64 ELF
+        run: cargo +${{ env.NIGHTLY }} build -p boot --release --target aarch64-unknown-none-softfloat
+
+      - name: Convert aarch64 ELF to flat image
+        run: |
+          set -euo pipefail
+          host="$(rustc +${{ env.NIGHTLY }} -vV | sed -n 's/^host: //p')"
+          objcopy="$(rustc +${{ env.NIGHTLY }} --print sysroot)/lib/rustlib/${host}/bin/llvm-objcopy"
+          "${objcopy}" -O binary \
+            target/aarch64-unknown-none-softfloat/release/fjord-kernel \
+            target/aarch64-unknown-none-softfloat/release/fjord-kernel.img
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          mkdir -p target/release-artifacts
+          cp target/x86_64-fjord/release/fjord-kernel target/release-artifacts/fjord-kernel-x86_64.elf
+          cp target/aarch64-unknown-none-softfloat/release/fjord-kernel target/release-artifacts/fjord-kernel-aarch64.elf
+          cp target/aarch64-unknown-none-softfloat/release/fjord-kernel.img target/release-artifacts/fjord-kernel-aarch64.img
+          (cd target/release-artifacts && sha256sum * > SHA256SUMS)
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: fjord-kernel-${{ github.ref_name }}
+          path: target/release-artifacts/
+          if-no-files-found: error

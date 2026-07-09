@@ -1,0 +1,190 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  NIGHTLY: nightly-2026-06-01
+
+jobs:
+  repository-policy:
+    name: Repository policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Reject stale generated-report artifacts
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -Fx 'IMPROVEMENTS.md'; then
+            echo 'IMPROVEMENTS.md must not exist in the repository.' >&2
+            exit 1
+          fi
+
+      - name: Reject Codex attribution in project files
+        run: |
+          set -euo pipefail
+          if git grep -n -I -E 'OpenAI|Codex|codex@example' -- . ':!.git'; then
+            echo 'Unexpected Codex/OpenAI attribution found.' >&2
+            exit 1
+          fi
+
+      - name: Reject unresolved implementation markers in code
+        run: |
+          set -euo pipefail
+          files="$(git ls-files '*.rs' '*.s' '*.sh' '*.toml' 'boot/*.json' '.cargo/*.toml' 'xtask/**')"
+          if [ -n "${files}" ] && echo "${files}" | xargs grep -n -E 'todo!\(|unimplemented!\(|TODO|FIXME'; then
+            echo 'Unresolved implementation marker found in code or build configuration.' >&2
+            exit 1
+          fi
+
+      - name: Validate workflow YAML syntax
+        run: |
+          ruby -e 'require "yaml"; ARGV.each { |f| YAML.load_file(f) }' .github/workflows/*.yml .github/dependabot.yml
+
+      - name: Check Git patches for whitespace errors
+        run: git diff --check HEAD^
+
+  rustfmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Show pinned Rust toolchain
+        run: rustup show
+
+      - name: Format check
+        run: cargo +${{ env.NIGHTLY }} fmt --all -- --check
+
+  host-tools:
+    name: Host tooling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache cargo state
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-host-${{ hashFiles('Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml', 'xtask/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-host-
+            ${{ runner.os }}-cargo-
+
+      - name: Check shipwright on host target
+        run: cargo +${{ env.NIGHTLY }} check -p shipwright --target x86_64-unknown-linux-gnu
+
+      - name: Clippy shipwright on host target
+        run: cargo +${{ env.NIGHTLY }} clippy -p shipwright --target x86_64-unknown-linux-gnu -- -W warnings
+
+  protocol-crates:
+    name: Protocol crate tests (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - anchor
+          - brine
+          - cask
+          - fjord-rt
+          - harbormaster
+          - helm
+          - lading
+          - libfjord
+          - logbook
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache cargo state
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-protocol-${{ matrix.package }}-${{ hashFiles('Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-protocol-${{ matrix.package }}-
+            ${{ runner.os }}-cargo-protocol-
+            ${{ runner.os }}-cargo-
+
+      - name: Check ${{ matrix.package }} on host target
+        run: cargo +${{ env.NIGHTLY }} check -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu
+
+      - name: Run ${{ matrix.package }} unit tests on host target
+        run: cargo +${{ env.NIGHTLY }} test -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu --lib
+
+      - name: Clippy ${{ matrix.package }} on host target
+        run: cargo +${{ env.NIGHTLY }} clippy -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu -- -W warnings
+
+  kernel-x86_64:
+    name: Kernel x86_64 check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache cargo state
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-kernel-x86-${{ hashFiles('Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml', 'boot/**', 'crates/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-kernel-x86-
+            ${{ runner.os }}-cargo-
+
+      - name: Check x86_64 kernel image
+        run: cargo +${{ env.NIGHTLY }} check -Zjson-target-spec -p boot --target boot/x86_64-fjord.json
+
+      - name: Clippy x86_64 kernel image
+        run: cargo +${{ env.NIGHTLY }} clippy -Zjson-target-spec -p boot --target boot/x86_64-fjord.json -- -W warnings
+
+  kernel-aarch64:
+    name: Kernel aarch64 check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache cargo state
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-kernel-aarch64-${{ hashFiles('Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml', 'boot/**', 'crates/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-kernel-aarch64-
+            ${{ runner.os }}-cargo-
+
+      - name: Check aarch64 kernel image
+        run: cargo +${{ env.NIGHTLY }} check -p boot --target aarch64-unknown-none-softfloat
+
+      - name: Clippy aarch64 kernel image
+        run: cargo +${{ env.NIGHTLY }} clippy -p boot --target aarch64-unknown-none-softfloat -- -W warnings

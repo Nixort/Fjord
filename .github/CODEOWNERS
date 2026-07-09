@@ -1,0 +1,9 @@
+# Default repository owner for all code, docs, workflows, and boot artifacts.
+* @Nixort
+
+# CI and security-critical automation should be reviewed explicitly.
+/.github/ @Nixort
+/boot/ @Nixort
+/crates/keel/ @Nixort
+/crates/hull/ @Nixort
+/crates/cask/ @Nixort

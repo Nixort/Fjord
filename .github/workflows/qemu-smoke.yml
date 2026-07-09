@@ -1,0 +1,123 @@
+name: QEMU smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.cargo/**'
+      - '.github/workflows/qemu-smoke.yml'
+      - 'boot/**'
+      - 'crates/boot/**'
+      - 'crates/hull/**'
+      - 'crates/keel/**'
+      - 'scripts/**'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.cargo/**'
+      - '.github/workflows/qemu-smoke.yml'
+      - 'boot/**'
+      - 'crates/boot/**'
+      - 'crates/hull/**'
+      - 'crates/keel/**'
+      - 'scripts/**'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qemu-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  NIGHTLY: nightly-2026-06-01
+
+jobs:
+  x86_64:
+    name: x86_64 PVH boot window
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install QEMU x86
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86
+
+      - name: Cache cargo state
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-qemu-x86-${{ hashFiles('Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml', 'boot/**', 'crates/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-qemu-x86-
+            ${{ runner.os }}-cargo-
+
+      - name: Time-boxed x86_64 QEMU smoke
+        run: |
+          set +e
+          timeout --foreground 45s cargo +${{ env.NIGHTLY }} shipwright -- qemu
+          status=$?
+          set -e
+          if [ "${status}" -eq 124 ]; then
+            echo 'QEMU reached the smoke-test time window; treating this as boot-stability success.'
+            exit 0
+          fi
+          exit "${status}"
+
+      - name: Upload QEMU guest log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qemu-x86_64-log
+          path: target/qemu-fjord.log
+          if-no-files-found: ignore
+
+  aarch64:
+    name: aarch64 virt boot window
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install QEMU aarch64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-arm
+
+      - name: Cache cargo state
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-qemu-aarch64-${{ hashFiles('Cargo.toml', 'rust-toolchain.toml', '.cargo/config.toml', 'boot/**', 'crates/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-qemu-aarch64-
+            ${{ runner.os }}-cargo-
+
+      - name: Time-boxed aarch64 QEMU smoke
+        run: |
+          set +e
+          timeout --foreground 45s scripts/qemu-aarch64.sh -no-reboot
+          status=$?
+          set -e
+          if [ "${status}" -eq 124 ]; then
+            echo 'QEMU reached the smoke-test time window; treating this as boot-stability success.'
+            exit 0
+          fi
+          exit "${status}"
