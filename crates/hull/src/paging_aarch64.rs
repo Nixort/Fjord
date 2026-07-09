@@ -151,6 +151,9 @@ impl Mapper {
         if breaks_wxn(attrs) {
             return false;
         }
+        if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
+            return false;
+        }
         // SAFETY: every table frame is reachable at its physical address and
         // uniquely owned by this mapper while we hold `&mut self`.
         unsafe {
@@ -167,7 +170,11 @@ impl Mapper {
                 Some(p) => Table::from_phys(p),
                 None => return false,
             };
-            l3.entries[l3_index(va)] = (pa & ADDR_MASK) | attrs | PTE_TABLE | PTE_VALID;
+            let leaf = &mut l3.entries[l3_index(va)];
+            if *leaf & PTE_VALID != 0 {
+                return false;
+            }
+            *leaf = (pa & ADDR_MASK) | attrs | PTE_TABLE | PTE_VALID;
         }
         true
     }
@@ -192,7 +199,11 @@ impl Mapper {
                 None => return false,
             };
             // Block descriptor: type bits [1:0] = 0b01 (PTE_VALID without PTE_TABLE).
-            l2.entries[l2_index(va)] = (pa & ADDR_MASK) | attrs | PTE_VALID;
+            let leaf = &mut l2.entries[l2_index(va)];
+            if *leaf & PTE_VALID != 0 {
+                return false;
+            }
+            *leaf = (pa & ADDR_MASK) | attrs | PTE_VALID;
         }
         true
     }

@@ -167,6 +167,12 @@ impl Mapper {
         if leaf_flags & WRITABLE != 0 && leaf_flags & NO_EXECUTE == 0 {
             return false;
         }
+        if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
+            return false;
+        }
+        if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
+            return false;
+        }
         // SAFETY: every table frame is identity-mapped and uniquely owned by
         // this mapper while we hold `&mut self`.
         unsafe {
@@ -183,7 +189,11 @@ impl Mapper {
                 Some(p) => PageTable::from_phys(p),
                 None => return false,
             };
-            pt.entries[pt_index(va)] = (pa & ADDR_MASK) | leaf_flags | PRESENT;
+            let leaf = &mut pt.entries[pt_index(va)];
+            if *leaf & PRESENT != 0 {
+                return false;
+            }
+            *leaf = (pa & ADDR_MASK) | leaf_flags | PRESENT;
         }
         true
     }
@@ -221,7 +231,11 @@ impl Mapper {
                 Some(p) => PageTable::from_phys(p),
                 None => return false,
             };
-            pt.entries[pt_index(va)] = (pa & ADDR_MASK) | leaf_flags | PRESENT | USER;
+            let leaf = &mut pt.entries[pt_index(va)];
+            if *leaf & PRESENT != 0 {
+                return false;
+            }
+            *leaf = (pa & ADDR_MASK) | leaf_flags | PRESENT | USER;
         }
         true
     }
