@@ -57,11 +57,28 @@ pub struct Section {
 impl Section {
     /// Validates that `self` lies fully within an image of `total` bytes,
     /// using checked arithmetic so a crafted `offset + len` cannot wrap.
+    fn end(self) -> Result<u64, CaskError> {
+        self.offset.checked_add(self.len).ok_or(CaskError::Malformed)
+    }
+
     fn end_within(self, total: u64) -> Result<(), CaskError> {
-        match self.offset.checked_add(self.len) {
-            Some(end) if end <= total => Ok(()),
+        match self.end() {
+            Ok(end) if end <= total => Ok(()),
             _ => Err(CaskError::Malformed),
         }
+    }
+
+    fn is_non_empty(self) -> bool {
+        self.len != 0
+    }
+
+    fn overlaps(self, other: Self) -> Result<bool, CaskError> {
+        if !self.is_non_empty() || !other.is_non_empty() {
+            return Ok(false);
+        }
+        let a_end = self.end()?;
+        let b_end = other.end()?;
+        Ok(self.offset < b_end && other.offset < a_end)
     }
 }
 
@@ -103,6 +120,31 @@ fn rd_u64(b: &[u8], off: usize) -> u64 {
     let mut a = [0u8; 8];
     a.copy_from_slice(&b[off..off + 8]);
     u64::from_le_bytes(a)
+}
+
+
+fn validate_section_table(header: &Header, total: u64) -> Result<(), CaskError> {
+    let sections = [header.lading, header.body, header.signature, header.logbook];
+    for section in sections {
+        section.end_within(total)?;
+        if section.is_non_empty() && section.offset < HEADER_LEN as u64 {
+            return Err(CaskError::Malformed);
+        }
+    }
+
+    for i in 0..sections.len() {
+        for j in i + 1..sections.len() {
+            if sections[i].overlaps(sections[j])? {
+                return Err(CaskError::Malformed);
+            }
+        }
+    }
+
+    let page_size = u64::from(header.page_size);
+    if header.body.offset % page_size != 0 || header.body.len % page_size != 0 {
+        return Err(CaskError::Malformed);
+    }
+    Ok(())
 }
 
 impl Header {
@@ -200,10 +242,7 @@ impl<'a> Cask<'a> {
         if header.body.len != body_expected {
             return Err(CaskError::Malformed);
         }
-        header.lading.end_within(total)?;
-        header.body.end_within(total)?;
-        header.signature.end_within(total)?;
-        header.logbook.end_within(total)?;
+        validate_section_table(&header, total)?;
 
         Ok(Self { image, header })
     }
@@ -387,6 +426,25 @@ mod tests {
         let (mut image, _) = build_image(2);
         // Push the logbook length far past the image end.
         image[112..120].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(Cask::parse(&image), Err(CaskError::Malformed)));
+    }
+
+
+    #[test]
+    fn rejects_overlapping_sections() {
+        let (mut image, _) = build_image(2);
+        // Make the signature begin in the middle of the body.
+        let body_off = rd_u64(&image[..HEADER_LEN], 72);
+        image[88..96].copy_from_slice(&(body_off + 8).to_le_bytes());
+        image[96..104].copy_from_slice(&16u64.to_le_bytes());
+        assert!(matches!(Cask::parse(&image), Err(CaskError::Malformed)));
+    }
+
+    #[test]
+    fn rejects_section_inside_header() {
+        let (mut image, _) = build_image(2);
+        image[56..64].copy_from_slice(&4u64.to_le_bytes());
+        image[64..72].copy_from_slice(&8u64.to_le_bytes());
         assert!(matches!(Cask::parse(&image), Err(CaskError::Malformed)));
     }
 
