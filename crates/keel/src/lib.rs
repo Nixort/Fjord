@@ -253,8 +253,8 @@ pub fn kmain(boot: &BootInfo) -> ! {
 
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
-    // TODO(keel): init subsystems in order cap -> vspace -> tide -> ipc, then
-    // launch the first userspace task.
+    // Subsystems are self-tested in dependency order; the remaining Helm
+    // handoff waits for the userspace task creation ABI.
     idle()
 }
 
