@@ -268,7 +268,11 @@ impl Mapper {
                 Some(p) => PageTable::from_phys(p),
                 None => return false,
             };
-            pd.entries[pd_index(va)] = (pa & ADDR_MASK) | leaf_flags | PRESENT | HUGE;
+            let leaf = &mut pd.entries[pd_index(va)];
+            if *leaf & PRESENT != 0 {
+                return false;
+            }
+            *leaf = (pa & ADDR_MASK) | leaf_flags | PRESENT | HUGE;
         }
         true
     }
