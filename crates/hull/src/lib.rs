@@ -44,7 +44,12 @@ pub mod user;
 /// fallback, fail closed: emit a clear marker and park instead of pretending that
 /// memory discovery or MMU setup succeeded.
 pub fn platform_init() -> ! {
-    crate::kprintln!("fjord: generic Hull platform_init fallback; parking CPU");
+    let mut console = serial::Serial::init();
+    let _ = core::fmt::Write::write_str(
+        &mut console,
+        "fjord: generic Hull platform_init fallback; parking CPU
+",
+    );
     loop {
         core::hint::spin_loop();
     }
