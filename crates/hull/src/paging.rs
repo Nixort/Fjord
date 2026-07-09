@@ -167,7 +167,7 @@ impl Mapper {
         if leaf_flags & WRITABLE != 0 && leaf_flags & NO_EXECUTE == 0 {
             return false;
         }
-        if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
+        if va & (FRAME_SIZE - 1) != 0 || pa & (FRAME_SIZE - 1) != 0 {
             return false;
         }
         // SAFETY: every table frame is identity-mapped and uniquely owned by
@@ -212,7 +212,7 @@ impl Mapper {
         if leaf_flags & WRITABLE != 0 && leaf_flags & NO_EXECUTE == 0 {
             return false;
         }
-        if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
+        if va & (FRAME_SIZE - 1) != 0 || pa & (FRAME_SIZE - 1) != 0 {
             return false;
         }
         // SAFETY: every table frame is identity-mapped and uniquely owned by
@@ -254,7 +254,7 @@ impl Mapper {
         if leaf_flags & WRITABLE != 0 && leaf_flags & NO_EXECUTE == 0 {
             return false;
         }
-        if va & (HUGE_PAGE_SIZE - 1) != 0 || pa & (HUGE_PAGE_SIZE - 1) != 0 {
+        if va & (HUGE_FRAME_SIZE - 1) != 0 || pa & (HUGE_FRAME_SIZE - 1) != 0 {
             return false;
         }
         // SAFETY: see `map_4k`.

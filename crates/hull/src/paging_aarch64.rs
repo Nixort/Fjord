@@ -151,7 +151,7 @@ impl Mapper {
         if breaks_wxn(attrs) {
             return false;
         }
-        if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
+        if va & (FRAME_SIZE - 1) != 0 || pa & (FRAME_SIZE - 1) != 0 {
             return false;
         }
         // SAFETY: every table frame is reachable at its physical address and
