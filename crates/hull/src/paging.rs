@@ -170,9 +170,6 @@ impl Mapper {
         if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
             return false;
         }
-        if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
-            return false;
-        }
         // SAFETY: every table frame is identity-mapped and uniquely owned by
         // this mapper while we hold `&mut self`.
         unsafe {
@@ -213,6 +210,9 @@ impl Mapper {
         alloc: &mut FrameAllocator,
     ) -> bool {
         if leaf_flags & WRITABLE != 0 && leaf_flags & NO_EXECUTE == 0 {
+            return false;
+        }
+        if va & (PAGE_SIZE - 1) != 0 || pa & (PAGE_SIZE - 1) != 0 {
             return false;
         }
         // SAFETY: every table frame is identity-mapped and uniquely owned by
