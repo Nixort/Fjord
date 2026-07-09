@@ -87,16 +87,11 @@ pub struct ProofStep {
 
 /// Re-folds a leaf up to a root using its inclusion proof.
 ///
-/// This is the loader's lazy path: given the faulting `page`, its `index`, the
-/// `proof` produced at seal time, and the trusted `root`, it returns whether the
-/// page is authentic. Allocation-free and constant in image size.
-///
-/// `index` is accepted for API symmetry and bounds intent; the fold itself is
-/// driven by each step's [`Side`], so a proof minted for a different position
-/// cannot validate against this root.
+/// This compatibility helper validates only the hash fold itself. New loader
+/// code should call [`verify_page_with_count`], which also checks that the proof
+/// shape matches the requested page index and total leaf count.
 #[must_use]
-pub fn verify_page(index: u64, page: &[u8], proof: &[ProofStep], root: &Hash) -> bool {
-    let _ = index;
+pub fn verify_page(_index: u64, page: &[u8], proof: &[ProofStep], root: &Hash) -> bool {
     let mut acc = leaf_hash(page);
     for step in proof {
         acc = match step.side {
@@ -105,6 +100,60 @@ pub fn verify_page(index: u64, page: &[u8], proof: &[ProofStep], root: &Hash) ->
         };
     }
     eq(&acc, root)
+}
+
+/// Strictly verifies a page proof against both the sealed root and tree shape.
+///
+/// The Cask header supplies `leaf_count`, so the loader can reject a proof whose
+/// left/right decisions do not match `index`, whose length is too short/long,
+/// or whose promoted odd leaf levels are represented ambiguously. This keeps
+/// lazy page verification bound to a single page position instead of accepting
+/// any sibling list that happens to fold to the same digest.
+#[must_use]
+pub fn verify_page_with_count(
+    index: u64,
+    leaf_count: u64,
+    page: &[u8],
+    proof: &[ProofStep],
+    root: &Hash,
+) -> bool {
+    if leaf_count == 0 || index >= leaf_count {
+        return false;
+    }
+
+    let mut acc = leaf_hash(page);
+    let mut idx = index;
+    let mut width = leaf_count;
+    let mut proof_pos = 0usize;
+
+    while width > 1 {
+        // Odd last node promoted unchanged: no proof step is consumed, but the
+        // position still moves to the next tree level.
+        if idx % 2 == 0 && idx + 1 >= width {
+            idx /= 2;
+            width = width.div_ceil(2);
+            continue;
+        }
+
+        let step = match proof.get(proof_pos) {
+            Some(step) => step,
+            None => return false,
+        };
+        let expected = if idx % 2 == 0 { Side::Right } else { Side::Left };
+        if step.side != expected {
+            return false;
+        }
+
+        acc = match step.side {
+            Side::Left => parent_hash(&step.sibling, &acc),
+            Side::Right => parent_hash(&acc, &step.sibling),
+        };
+        proof_pos += 1;
+        idx /= 2;
+        width = width.div_ceil(2);
+    }
+
+    proof_pos == proof.len() && eq(&acc, root)
 }
 
 /// Compares two digests without a data-dependent early return.
@@ -250,6 +299,21 @@ mod tests {
                 assert!(verify_page(i as u64, &p[i], &proof, &root), "n={n} i={i}");
             }
         }
+    }
+
+
+    #[test]
+    fn strict_verify_rejects_wrong_shape() {
+        let p = pages(5, 128);
+        let tree = MerkleTree::build(&refs(&p)).unwrap();
+        let root = tree.root();
+        let mut proof = tree.proof(4).unwrap();
+        proof.push(ProofStep {
+            sibling: leaf_hash(&p[0]),
+            side: Side::Right,
+        });
+        assert!(!verify_page_with_count(4, 5, &p[4], &proof, &root));
+        assert!(!verify_page_with_count(5, 5, &p[4], &[], &root));
     }
 
     #[test]

@@ -70,7 +70,7 @@ pub fn verify_page<'a>(
     proof: &[ProofStep],
 ) -> Result<&'a [u8], CaskError> {
     let page = cask.page(index).ok_or(CaskError::Malformed)?;
-    if merkle::verify_page(index, page, proof, cask.merkle_root()) {
+    if merkle::verify_page_with_count(index, cask.page_count(), page, proof, cask.merkle_root()) {
         Ok(page)
     } else {
         Err(CaskError::IntegrityFailed)
