@@ -54,7 +54,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-system-x86
 
       - name: Cache cargo state
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -99,7 +99,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-system-arm
 
       - name: Cache cargo state
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
