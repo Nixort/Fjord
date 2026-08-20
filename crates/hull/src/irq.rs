@@ -3,9 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 23 june 2026
 
 //! Interrupt control: CPU-level interrupt masking plus (eventually) the
 //! interrupt-controller abstraction (APIC on x86_64, GIC on aarch64).

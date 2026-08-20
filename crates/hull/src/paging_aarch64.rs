@@ -3,9 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 24 june 2026
 
 //! aarch64 stage-1 paging: a 4-level (4 KiB granule, 48-bit VA) translation
 //! hierarchy built and activated with per-section W^X, mirroring the x86_64

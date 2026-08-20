@@ -3,9 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 24 june 2026
 
 //! The scheduler: priority dispatch with MCS scheduling contexts.
 //!

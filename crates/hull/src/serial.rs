@@ -3,9 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 23 june 2026
 
 //! Early debug console: 16550 UART (x86_64 COM1) / PL011 (aarch64, QEMU `virt`).
 //!

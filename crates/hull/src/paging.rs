@@ -3,9 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 23 june 2026
 
 //! x86_64 4-level paging: page-table types, a frame-backed mapper, and the
 //! routine that builds and activates the kernel's own address space with

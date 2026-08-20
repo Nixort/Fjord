@@ -3,9 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 25 june 2026
 
 //! A single timer-tick hook: the inversion-of-control seam that lets the
 //! scheduler (which lives *above* Hull, in `keel::tide`) preempt the running

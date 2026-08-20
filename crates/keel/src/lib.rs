@@ -3,9 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 23 june 2026
 
 //! # Keel — the Fjord microkernel
 //!
@@ -83,7 +81,6 @@ pub fn kmain(boot: &BootInfo) -> ! {
     let _serial = hull::serial::Serial::init();
 
     hull::kprintln!();
-    hull::kprintln!("Fjord OS — keel v{}", env!("CARGO_PKG_VERSION"));
     hull::kprintln!("  arch    : {ARCH}");
     hull::kprintln!(
         "  profile : {}",

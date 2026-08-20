@@ -3,9 +3,7 @@
  * License: GNU General Public License v3
  * You can find the license file in the project root.
  *
- * Fjord OS — version 0.0.1
  * The code was written for Fjord.
- * 23 june 2026
  */
 
 /* Minimal kernel link script for the x86_64 `boot` binary.

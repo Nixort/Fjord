@@ -3,9 +3,7 @@
 // License: GNU General Public License v3
 // You can find the license file in the project root.
 //
-// Fjord OS — version 0.0.2
 // The code was written for Fjord.
-// 24 june 2026
 
 //! aarch64 interrupt + timer bring-up: the GIC v2 distributor / CPU interface
 //! plus the ARM generic timer (EL1 physical timer, PPI INTID 30).

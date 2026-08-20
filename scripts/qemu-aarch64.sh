@@ -4,9 +4,7 @@
 # License: GNU General Public License v3
 # You can find the license file in the project root.
 #
-# Fjord OS — version 0.0.2
 # The code was written for Fjord.
-# 24 june 2026
 #
 # Build the aarch64 kernel, wrap it as a Linux arm64 Image (flat binary), and
 # boot it under QEMU `virt`. The Image header makes QEMU pass the DTB pointer
