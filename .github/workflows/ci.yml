@@ -38,7 +38,7 @@ jobs:
       - name: Reject Codex attribution in project files
         run: |
           set -euo pipefail
-          if git grep -n -I -E 'OpenAI|Codex|codex@example' -- . ':!.git'; then
+          if git grep -n -I -E 'OpenAI|Codex|codex@example' -- . ':!.git' ':!.github/workflows/ci.yml'; then
             echo 'Unexpected Codex/OpenAI attribution found.' >&2
             exit 1
           fi
@@ -66,8 +66,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Show pinned Rust toolchain
-        run: rustup show
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "${{ env.NIGHTLY }}" --profile minimal \
+            --component rust-src \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview \
+            --target x86_64-unknown-none \
+            --target aarch64-unknown-none-softfloat
+          rustup run "${{ env.NIGHTLY }}" rustc -Vv
 
       - name: Format check
         run: cargo +${{ env.NIGHTLY }} fmt --all -- --check
@@ -91,11 +99,27 @@ jobs:
             ${{ runner.os }}-cargo-host-
             ${{ runner.os }}-cargo-
 
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "${{ env.NIGHTLY }}" --profile minimal \
+            --component rust-src \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview \
+            --target x86_64-unknown-none \
+            --target aarch64-unknown-none-softfloat
+
       - name: Check shipwright on host target
-        run: cargo +${{ env.NIGHTLY }} check -p shipwright --target x86_64-unknown-linux-gnu
+        run: |
+          cd "${RUNNER_TEMP}"
+          export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target/host"
+          cargo +${{ env.NIGHTLY }} check --manifest-path "${GITHUB_WORKSPACE}/Cargo.toml" -p shipwright --target x86_64-unknown-linux-gnu
 
       - name: Clippy shipwright on host target
-        run: cargo +${{ env.NIGHTLY }} clippy -p shipwright --target x86_64-unknown-linux-gnu -- -W warnings
+        run: |
+          cd "${RUNNER_TEMP}"
+          export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target/host"
+          cargo +${{ env.NIGHTLY }} clippy --manifest-path "${GITHUB_WORKSPACE}/Cargo.toml" -p shipwright --target x86_64-unknown-linux-gnu -- -W warnings
 
   protocol-crates:
     name: Protocol crate tests (${{ matrix.package }})
@@ -130,14 +154,33 @@ jobs:
             ${{ runner.os }}-cargo-protocol-
             ${{ runner.os }}-cargo-
 
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "${{ env.NIGHTLY }}" --profile minimal \
+            --component rust-src \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview \
+            --target x86_64-unknown-none \
+            --target aarch64-unknown-none-softfloat
+
       - name: Check ${{ matrix.package }} on host target
-        run: cargo +${{ env.NIGHTLY }} check -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu
+        run: |
+          cd "${RUNNER_TEMP}"
+          export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target/host"
+          cargo +${{ env.NIGHTLY }} check --manifest-path "${GITHUB_WORKSPACE}/Cargo.toml" -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu
 
       - name: Run ${{ matrix.package }} unit tests on host target
-        run: cargo +${{ env.NIGHTLY }} test -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu --lib
+        run: |
+          cd "${RUNNER_TEMP}"
+          export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target/host"
+          cargo +${{ env.NIGHTLY }} test --manifest-path "${GITHUB_WORKSPACE}/Cargo.toml" -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu --lib
 
       - name: Clippy ${{ matrix.package }} on host target
-        run: cargo +${{ env.NIGHTLY }} clippy -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu -- -W warnings
+        run: |
+          cd "${RUNNER_TEMP}"
+          export CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target/host"
+          cargo +${{ env.NIGHTLY }} clippy --manifest-path "${GITHUB_WORKSPACE}/Cargo.toml" -p ${{ matrix.package }} --target x86_64-unknown-linux-gnu -- -W warnings
 
   kernel-x86_64:
     name: Kernel x86_64 check
@@ -157,6 +200,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-kernel-x86-
             ${{ runner.os }}-cargo-
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "${{ env.NIGHTLY }}" --profile minimal \
+            --component rust-src \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview \
+            --target x86_64-unknown-none \
+            --target aarch64-unknown-none-softfloat
 
       - name: Check x86_64 kernel image
         run: cargo +${{ env.NIGHTLY }} check -Zjson-target-spec -p boot --target boot/x86_64-fjord.json
@@ -182,6 +235,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-kernel-aarch64-
             ${{ runner.os }}-cargo-
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "${{ env.NIGHTLY }}" --profile minimal \
+            --component rust-src \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview \
+            --target x86_64-unknown-none \
+            --target aarch64-unknown-none-softfloat
 
       - name: Check aarch64 kernel image
         run: cargo +${{ env.NIGHTLY }} check -p boot --target aarch64-unknown-none-softfloat
