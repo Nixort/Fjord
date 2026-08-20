@@ -284,6 +284,12 @@ pub struct Thread {
     prio: u8,
     sc: SchedContext,
     state: RunState,
+    // Intrusive links are meaningful only while `in_ready` is true. They keep
+    // every priority FIFO caller-owned and avoid allocator-dependent queues in
+    // the scheduler's hot path.
+    next_ready: Option<usize>,
+    prev_ready: Option<usize>,
+    in_ready: bool,
 }
 
 impl Thread {
@@ -321,9 +327,17 @@ pub enum SchedError {
     NotFound,
 }
 
-/// A priority dispatcher over a caller-owned table of threads.
+/// A fixed-priority dispatcher over caller-owned thread storage.
+///
+/// Each of the 256 priorities owns a FIFO expressed through bounded intrusive
+/// slot links. `ready_bitmap` contains one bit per non-empty queue, so selecting
+/// the highest runnable priority takes four machine-word probes and one
+/// `leading_zeros` instruction instead of inspecting every admitted thread.
 pub struct Scheduler<'t> {
     threads: &'t mut [Thread],
+    ready_head: [Option<usize>; 256],
+    ready_tail: [Option<usize>; 256],
+    ready_bitmap: [u64; 4],
     current: Option<usize>,
     ticks: u64,
 }
@@ -337,6 +351,9 @@ impl<'t> Scheduler<'t> {
         }
         Self {
             threads,
+            ready_head: [None; 256],
+            ready_tail: [None; 256],
+            ready_bitmap: [0; 4],
             current: None,
             ticks: 0,
         }
@@ -369,14 +386,104 @@ impl<'t> Scheduler<'t> {
         self.current.map(|i| self.threads[i].id)
     }
 
+    /// Number of non-empty priority queues; useful for bounded-ready-set tests.
+    #[must_use]
+    pub fn ready_priorities(&self) -> usize {
+        self.ready_bitmap
+            .iter()
+            .map(|word| word.count_ones() as usize)
+            .sum()
+    }
+
     fn index_of(&self, id: u64) -> Option<usize> {
         self.threads
             .iter()
             .position(|t| t.state != RunState::Inactive && t.id == id)
     }
 
+    fn bitmap_word(prio: u8) -> usize {
+        usize::from(prio) / 64
+    }
+
+    fn bitmap_mask(prio: u8) -> u64 {
+        1u64 << (u32::from(prio) % 64)
+    }
+
+    fn mark_priority_ready(&mut self, prio: u8) {
+        self.ready_bitmap[Self::bitmap_word(prio)] |= Self::bitmap_mask(prio);
+    }
+
+    fn clear_priority_if_empty(&mut self, prio: u8) {
+        if self.ready_head[usize::from(prio)].is_none() {
+            self.ready_bitmap[Self::bitmap_word(prio)] &= !Self::bitmap_mask(prio);
+        }
+    }
+
+    fn enqueue_ready(&mut self, idx: usize) {
+        debug_assert!(self.threads[idx].state == RunState::Ready);
+        debug_assert!(!self.threads[idx].in_ready);
+        let prio = self.threads[idx].prio;
+        let p = usize::from(prio);
+        let tail = self.ready_tail[p];
+        self.threads[idx].prev_ready = tail;
+        self.threads[idx].next_ready = None;
+        self.threads[idx].in_ready = true;
+        if let Some(tail) = tail {
+            self.threads[tail].next_ready = Some(idx);
+        } else {
+            self.ready_head[p] = Some(idx);
+        }
+        self.ready_tail[p] = Some(idx);
+        self.mark_priority_ready(prio);
+    }
+
+    fn remove_ready(&mut self, idx: usize) {
+        debug_assert!(self.threads[idx].in_ready);
+        let prio = self.threads[idx].prio;
+        let p = usize::from(prio);
+        let prev = self.threads[idx].prev_ready;
+        let next = self.threads[idx].next_ready;
+        if let Some(prev) = prev {
+            self.threads[prev].next_ready = next;
+        } else {
+            self.ready_head[p] = next;
+        }
+        if let Some(next) = next {
+            self.threads[next].prev_ready = prev;
+        } else {
+            self.ready_tail[p] = prev;
+        }
+        self.threads[idx].next_ready = None;
+        self.threads[idx].prev_ready = None;
+        self.threads[idx].in_ready = false;
+        self.clear_priority_if_empty(prio);
+    }
+
+    /// Return the head of the highest non-empty ready priority FIFO.
+    fn pick(&self) -> Option<usize> {
+        for word_index in (0..self.ready_bitmap.len()).rev() {
+            let word = self.ready_bitmap[word_index];
+            if word != 0 {
+                let bit = 63 - word.leading_zeros() as usize;
+                let prio = word_index * 64 + bit;
+                return self.ready_head[prio];
+            }
+        }
+        None
+    }
+
+    fn make_budget_eligible(&mut self, idx: usize) {
+        if self.threads[idx].state == RunState::Ready
+            && self.threads[idx].sc.remaining > 0
+            && !self.threads[idx].in_ready
+        {
+            self.enqueue_ready(idx);
+        }
+    }
+
     /// Admit a thread with the given id, priority, and scheduling context.
-    /// It starts `Ready`.
+    /// It starts `Ready`; contexts with zero initial budget are retained but not
+    /// queued until their first period boundary replenishes them.
     ///
     /// # Errors
     /// Returns [`SchedError::Full`] if no free slot remains.
@@ -391,7 +498,11 @@ impl<'t> Scheduler<'t> {
             prio,
             sc,
             state: RunState::Ready,
+            next_ready: None,
+            prev_ready: None,
+            in_ready: false,
         };
+        self.make_budget_eligible(slot);
         Ok(slot)
     }
 
@@ -401,7 +512,13 @@ impl<'t> Scheduler<'t> {
     /// Returns [`SchedError::NotFound`] if no such thread is admitted.
     pub fn block(&mut self, id: u64) -> Result<(), SchedError> {
         let idx = self.index_of(id).ok_or(SchedError::NotFound)?;
+        if self.threads[idx].in_ready {
+            self.remove_ready(idx);
+        }
         self.threads[idx].state = RunState::Blocked;
+        if self.current == Some(idx) {
+            self.current = None;
+        }
         Ok(())
     }
 
@@ -412,23 +529,8 @@ impl<'t> Scheduler<'t> {
     pub fn unblock(&mut self, id: u64) -> Result<(), SchedError> {
         let idx = self.index_of(id).ok_or(SchedError::NotFound)?;
         self.threads[idx].state = RunState::Ready;
+        self.make_budget_eligible(idx);
         Ok(())
-    }
-
-    /// Pick the highest-priority `Ready` thread that still has budget. Ties go
-    /// to the lowest slot index (a simple round-robin seed).
-    fn pick(&self) -> Option<usize> {
-        let mut best: Option<usize> = None;
-        for (i, t) in self.threads.iter().enumerate() {
-            if t.state == RunState::Ready && t.sc.remaining > 0 {
-                match best {
-                    None => best = Some(i),
-                    Some(b) if t.prio > self.threads[b].prio => best = Some(i),
-                    Some(_) => {}
-                }
-            }
-        }
-        best
     }
 
     /// Recompute and return the thread that should run now.
@@ -438,20 +540,29 @@ impl<'t> Scheduler<'t> {
     }
 
     /// Advance time by one tick: charge the running thread a unit of budget,
-    /// replenish any context at its period boundary, then redispatch. Returns
-    /// the thread that should run after the tick.
+    /// rotate it behind equal-priority peers when it remains eligible, replenish
+    /// contexts at their period boundary, then redispatch. Returns the thread
+    /// that should run after the tick.
     pub fn tick(&mut self) -> Option<u64> {
         self.ticks += 1;
 
         if let Some(i) = self.current {
-            let sc = &mut self.threads[i].sc;
-            sc.remaining = sc.remaining.saturating_sub(1);
+            let was_ready = self.threads[i].in_ready;
+            if was_ready {
+                self.remove_ready(i);
+            }
+            self.threads[i].sc.remaining = self.threads[i].sc.remaining.saturating_sub(1);
+            self.make_budget_eligible(i);
         }
 
         let now = self.ticks;
-        for t in self.threads.iter_mut() {
-            if t.state != RunState::Inactive && t.sc.period != 0 && now % t.sc.period == 0 {
-                t.sc.remaining = t.sc.budget;
+        for idx in 0..self.threads.len() {
+            if self.threads[idx].state != RunState::Inactive
+                && self.threads[idx].sc.period != 0
+                && now % self.threads[idx].sc.period == 0
+            {
+                self.threads[idx].sc.remaining = self.threads[idx].sc.budget;
+                self.make_budget_eligible(idx);
             }
         }
 
@@ -882,5 +993,44 @@ mod replenishment_tests {
             ReplenishmentQueue::new(&mut storage, 3, 2, 0).err(),
             Some(RefillError::InvalidParameters)
         );
+    }
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    extern crate std;
+
+    use super::*;
+
+    #[test]
+    fn bitmap_selects_highest_priority_and_rotates_fifo_peers() {
+        let mut slots = [Thread::default(); 4];
+        let mut scheduler = Scheduler::new(&mut slots);
+        scheduler.admit(1, 2, SchedContext::new(8, 32)).unwrap();
+        scheduler.admit(2, 200, SchedContext::new(8, 32)).unwrap();
+        scheduler.admit(3, 200, SchedContext::new(8, 32)).unwrap();
+
+        // Two set bits represent the low queue and the shared high-priority FIFO.
+        assert_eq!(scheduler.ready_priorities(), 2);
+        assert_eq!(scheduler.schedule(), Some(2));
+        // A charged task returns to the FIFO tail, so its equal-priority peer is
+        // next without weakening strict priority over task 1.
+        assert_eq!(scheduler.tick(), Some(3));
+
+        scheduler.block(3).unwrap();
+        assert_eq!(scheduler.schedule(), Some(2));
+        scheduler.block(2).unwrap();
+        assert_eq!(scheduler.ready_priorities(), 1);
+        assert_eq!(scheduler.schedule(), Some(1));
+
+        // Wake restores the high-priority bit and dispatches that queue again.
+        scheduler.unblock(2).unwrap();
+        assert_eq!(scheduler.ready_priorities(), 2);
+        assert_eq!(scheduler.schedule(), Some(2));
+    }
+
+    #[test]
+    fn scheduler_selftest_preserves_budget_and_blocking_contract() {
+        selftest().unwrap();
     }
 }
