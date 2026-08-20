@@ -25,6 +25,7 @@ pub mod cdt;
 pub mod cte;
 pub mod ipc;
 pub mod irqhandler;
+pub mod task;
 pub mod tide;
 pub mod untyped;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
@@ -188,6 +189,14 @@ pub fn kmain(boot: &BootInfo) -> ! {
     match tide::selftest() {
         Ok(()) => hull::kprintln!("keel: tide self-test -> priority/budget/block OK"),
         Err(e) => hull::kprintln!("keel: WARNING tide self-test failed: {e:?}"),
+    }
+
+    // TaskControlBlock: establish the kernel object that owns a task's CSpace,
+    // VSpace root, resumable user frame and explicit lifecycle before Tide and
+    // IPC are coupled to real tasks in later Phase 2 slices.
+    match task::selftest() {
+        Ok(()) => hull::kprintln!("keel: task self-test -> cspace/vspace/frame lifecycle OK"),
+        Err(e) => hull::kprintln!("keel: WARNING task self-test failed: {e:?}"),
     }
 
     // Tide context switch: prove the real callee-saved register save/restore and
