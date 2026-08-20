@@ -65,6 +65,206 @@ impl SchedContext {
     }
 }
 
+/// One future grant of CPU budget in a bounded scheduling context queue.
+///
+/// A refill becomes consumable at `eligible_at`. Fields stay private so the
+/// queue alone can preserve temporal ordering and prevent an earlier refill
+/// from being fabricated by a caller.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Refill {
+    amount: u64,
+    eligible_at: u64,
+}
+
+impl Refill {
+    const EMPTY: Self = Self {
+        amount: 0,
+        eligible_at: 0,
+    };
+
+    /// Amount of CPU time restored by this refill.
+    #[must_use]
+    pub const fn amount(self) -> u64 {
+        self.amount
+    }
+
+    /// Earliest tick at which this refill is eligible to run.
+    #[must_use]
+    pub const fn eligible_at(self) -> u64 {
+        self.eligible_at
+    }
+}
+
+/// Why a bounded replenishment operation was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefillError {
+    /// The supplied storage has no slots.
+    NoStorage,
+    /// Budget or period is zero, or budget exceeds period.
+    InvalidParameters,
+    /// Consuming zero ticks is not a meaningful accounting operation.
+    ZeroAmount,
+    /// No refill is currently eligible at the requested time.
+    NotEligible,
+    /// The requested charge exceeds the head refill's available budget.
+    InsufficientBudget,
+    /// `now + period` overflowed the monotonic tick domain.
+    TimeOverflow,
+}
+
+/// Heap-free sporadic-server replenishment queue.
+///
+/// A scheduling context begins with one immediately eligible refill equal to
+/// its full budget. Each successful consumption schedules the same amount for
+/// `now + period`. Refill storage is caller-owned and bounded. If the queue is
+/// full, the implementation merges work into the latest future refill; when the
+/// only slot is the currently eligible one, it postpones the remaining head as
+/// well. Both cases delay availability rather than creating earlier budget, so
+/// saturation may reduce service but never breaks the execution bound.
+pub struct ReplenishmentQueue<'r> {
+    refills: &'r mut [Refill],
+    head: usize,
+    len: usize,
+    budget: u64,
+    period: u64,
+}
+
+impl<'r> ReplenishmentQueue<'r> {
+    /// Constructs a scheduling-context queue with an initial refill of `budget`
+    /// eligible at `now`.
+    pub fn new(
+        refills: &'r mut [Refill],
+        budget: u64,
+        period: u64,
+        now: u64,
+    ) -> Result<Self, RefillError> {
+        if refills.is_empty() {
+            return Err(RefillError::NoStorage);
+        }
+        if budget == 0 || period == 0 || budget > period {
+            return Err(RefillError::InvalidParameters);
+        }
+        for refill in refills.iter_mut() {
+            *refill = Refill::EMPTY;
+        }
+        refills[0] = Refill {
+            amount: budget,
+            eligible_at: now,
+        };
+        Ok(Self {
+            refills,
+            head: 0,
+            len: 1,
+            budget,
+            period,
+        })
+    }
+
+    /// Configured maximum execution budget.
+    #[must_use]
+    pub const fn budget(&self) -> u64 {
+        self.budget
+    }
+
+    /// Configured replenishment period.
+    #[must_use]
+    pub const fn period(&self) -> u64 {
+        self.period
+    }
+
+    /// Number of live refill entries currently retained.
+    #[must_use]
+    pub const fn refill_count(&self) -> usize {
+        self.len
+    }
+
+    /// The current head refill, if one remains.
+    #[must_use]
+    pub fn head_refill(&self) -> Option<Refill> {
+        (self.len != 0).then(|| self.refills[self.head])
+    }
+
+    /// Budget immediately eligible for consumption at `now`.
+    #[must_use]
+    pub fn available(&self, now: u64) -> u64 {
+        self.head_refill()
+            .filter(|refill| refill.eligible_at <= now)
+            .map_or(0, |refill| refill.amount)
+    }
+
+    /// Charge `amount` ticks at `now` and schedule their future refill.
+    ///
+    /// A charge is atomic with respect to validation: invalid amount, ineligible
+    /// time, insufficient head budget and timestamp overflow leave queue state
+    /// untouched. On bounded-storage saturation the queue delays availability
+    /// rather than granting budget earlier than its eligibility time.
+    pub fn consume(&mut self, now: u64, amount: u64) -> Result<(), RefillError> {
+        if amount == 0 {
+            return Err(RefillError::ZeroAmount);
+        }
+        let eligible = self.head_refill().ok_or(RefillError::NotEligible)?;
+        if eligible.eligible_at > now {
+            return Err(RefillError::NotEligible);
+        }
+        if amount > eligible.amount {
+            return Err(RefillError::InsufficientBudget);
+        }
+        let refill_at = now
+            .checked_add(self.period)
+            .ok_or(RefillError::TimeOverflow)?;
+
+        self.refills[self.head].amount -= amount;
+        if self.refills[self.head].amount == 0 {
+            self.pop_head();
+        }
+        self.push_or_defer(Refill {
+            amount,
+            eligible_at: refill_at,
+        });
+        Ok(())
+    }
+
+    fn pop_head(&mut self) {
+        debug_assert!(self.len > 0);
+        self.refills[self.head] = Refill::EMPTY;
+        self.head = (self.head + 1) % self.refills.len();
+        self.len -= 1;
+    }
+
+    fn tail_index(&self) -> usize {
+        (self.head + self.len - 1) % self.refills.len()
+    }
+
+    fn push_or_defer(&mut self, refill: Refill) {
+        debug_assert!(refill.amount > 0);
+        if self.len == 0 {
+            self.refills[self.head] = refill;
+            self.len = 1;
+            return;
+        }
+
+        let tail = self.tail_index();
+        if self.refills[tail].eligible_at == refill.eligible_at {
+            self.refills[tail].amount = self.refills[tail].amount.saturating_add(refill.amount);
+            return;
+        }
+        if self.len < self.refills.len() {
+            let slot = (self.head + self.len) % self.refills.len();
+            self.refills[slot] = refill;
+            self.len += 1;
+            return;
+        }
+
+        // No spare refill entry. A future tail can absorb the new refill without
+        // becoming earlier. If the only/full tail is currently eligible, move its
+        // remaining budget to the new later deadline too; postponement is safe.
+        if self.refills[tail].eligible_at < refill.eligible_at {
+            self.refills[tail].eligible_at = refill.eligible_at;
+        }
+        self.refills[tail].amount = self.refills[tail].amount.saturating_add(refill.amount);
+    }
+}
+
 /// The run state of a scheduler slot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RunState {
@@ -607,5 +807,80 @@ mod preempt {
             worker_a,
             worker_b,
         })
+    }
+}
+
+#[cfg(test)]
+mod replenishment_tests {
+    extern crate std;
+
+    use super::*;
+
+    #[test]
+    fn consumed_budget_returns_only_at_its_period_boundary() {
+        let mut storage = [Refill::default(); 4];
+        let mut queue = ReplenishmentQueue::new(&mut storage, 4, 10, 0).unwrap();
+
+        assert_eq!(queue.available(0), 4);
+        queue.consume(0, 1).unwrap();
+        assert_eq!(queue.available(0), 3);
+        queue.consume(0, 3).unwrap();
+        assert_eq!(queue.available(0), 0);
+        assert_eq!(queue.available(9), 0);
+        assert_eq!(queue.available(10), 4);
+        queue.consume(10, 4).unwrap();
+        assert_eq!(queue.available(19), 0);
+        assert_eq!(queue.available(20), 4);
+    }
+
+    #[test]
+    fn bounded_saturation_delays_never_accelerates_budget() {
+        let mut storage = [Refill::default(); 1];
+        let mut queue = ReplenishmentQueue::new(&mut storage, 4, 10, 0).unwrap();
+
+        queue.consume(0, 1).unwrap();
+        // With only one entry, the three unused ticks are deliberately delayed
+        // alongside the consumed tick's refill. This loses no safety boundary:
+        // budget becomes later, never earlier.
+        assert_eq!(queue.available(0), 0);
+        assert_eq!(queue.available(9), 0);
+        assert_eq!(queue.available(10), 4);
+    }
+
+    #[test]
+    fn rejected_charge_leaves_queue_unchanged() {
+        let mut storage = [Refill::default(); 2];
+        let mut queue = ReplenishmentQueue::new(&mut storage, 2, 4, u64::MAX - 2).unwrap();
+        let before = queue.head_refill();
+
+        assert_eq!(queue.consume(u64::MAX - 2, 0), Err(RefillError::ZeroAmount));
+        assert_eq!(
+            queue.consume(u64::MAX - 2, 3),
+            Err(RefillError::InsufficientBudget)
+        );
+        assert_eq!(
+            queue.consume(u64::MAX - 2, 1),
+            Err(RefillError::TimeOverflow)
+        );
+        assert_eq!(queue.head_refill(), before);
+        assert_eq!(queue.available(u64::MAX - 2), 2);
+    }
+
+    #[test]
+    fn construction_rejects_invalid_parameters() {
+        let mut no_storage: [Refill; 0] = [];
+        assert_eq!(
+            ReplenishmentQueue::new(&mut no_storage, 1, 1, 0).err(),
+            Some(RefillError::NoStorage)
+        );
+        let mut storage = [Refill::default(); 1];
+        assert_eq!(
+            ReplenishmentQueue::new(&mut storage, 0, 1, 0).err(),
+            Some(RefillError::InvalidParameters)
+        );
+        assert_eq!(
+            ReplenishmentQueue::new(&mut storage, 3, 2, 0).err(),
+            Some(RefillError::InvalidParameters)
+        );
     }
 }
