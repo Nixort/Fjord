@@ -22,7 +22,10 @@
 //! built and torn down without disturbing the running kernel. Folding the page
 //! capability into the CDT so `revoke` tears mappings down is still future work.
 
-use crate::cap::{CapType, Capability, Rights};
+use crate::{
+    cap::{CapType, Capability, Rights},
+    task::TaskControlBlock,
+};
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 use hull::{
     mmu::FrameAllocator,
@@ -279,6 +282,22 @@ impl<'maps> HwVSpace<'maps> {
         })
     }
 
+    /// Clone the active kernel root for a task address space.
+    ///
+    /// The resulting root inherits the mappings that keep kernel execution,
+    /// traps and device access live. It has a distinct top-level table, so
+    /// later task user-page additions do not mutate the active kernel root.
+    pub fn clone_kernel_root(
+        maps: &'maps mut [Mapping],
+        alloc: &mut FrameAllocator,
+    ) -> Option<Self> {
+        let mapper = Mapper::clone_active_root(alloc)?;
+        Some(Self {
+            book: VSpace::new(maps),
+            mapper,
+        })
+    }
+
     /// Physical address of the root translation table (the TTBR0/CR3 value).
     #[must_use]
     pub fn root(&self) -> u64 {
@@ -352,6 +371,60 @@ impl<'maps> HwVSpace<'maps> {
     }
 }
 
+/// Saved kernel root across a task address-space handoff.
+///
+/// The guard has no task reference because the active hardware root is a
+/// physical address. It is intentionally consumed by [`restore`](Self::restore)
+/// so a caller cannot accidentally restore the same root twice.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub struct ActiveTaskVSpace {
+    previous_root: u64,
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+impl ActiveTaskVSpace {
+    /// Restore the kernel/root address space active before the handoff.
+    ///
+    /// # Safety
+    /// The original root must still be valid and map the calling kernel context.
+    pub unsafe fn restore(self) -> Result<(), VSpaceError> {
+        // SAFETY: forwarded from the caller; `previous_root` was read from the
+        // live hardware register immediately before the matching handoff.
+        unsafe { paging::activate_root(self.previous_root) };
+        if paging::active_root() == self.previous_root {
+            Ok(())
+        } else {
+            Err(VSpaceError::HardwareFault)
+        }
+    }
+}
+
+/// Activate the VSpace root owned by `task` and return a guard for restoration.
+///
+/// # Safety
+/// The task's root must be a prepared clone that maps the current kernel code,
+/// stacks, interrupt/trap path, frame tables and required MMIO. The function is
+/// unsafe because the CPU faults immediately if that invariant is violated. A
+/// later user-entry patch will call this only after task code, stack and IPC
+/// buffer mappings are fully installed.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub unsafe fn handoff_to_task(task: &TaskControlBlock) -> Result<ActiveTaskVSpace, VSpaceError> {
+    let root = task.vspace_root();
+    if root & (PAGE_SIZE - 1) != 0 || root == 0 {
+        return Err(VSpaceError::HardwareFault);
+    }
+    let previous_root = paging::active_root();
+    // SAFETY: forwarded task-root mapping contract from the caller.
+    unsafe { paging::activate_root(root) };
+    if paging::active_root() != root {
+        // SAFETY: `previous_root` was active immediately before this attempted
+        // handoff and is the only known recovery root.
+        unsafe { paging::activate_root(previous_root) };
+        return Err(VSpaceError::HardwareFault);
+    }
+    Ok(ActiveTaskVSpace { previous_root })
+}
+
 /// Boot-time self-test that drives the `hull` page-table `Mapper` through
 /// [`HwVSpace`]: it builds an inactive address space, maps a page, verifies the
 /// hardware leaf, proves W^X is enforced, then unmaps and confirms the leaf is
@@ -407,5 +480,43 @@ pub fn hw_selftest(frames: &mut FrameAllocator) -> Result<(), VSpaceError> {
         return Err(VSpaceError::NotMapped);
     }
 
+    Ok(())
+}
+
+/// Boot-time proof that a prepared task root can be activated and restored.
+///
+/// The self-test deliberately hands off only to a clone of the current kernel
+/// root. This exercises the real CR3/TTBR0 switch while retaining every mapping
+/// needed by the executing kernel; user-page population and ring-3/EL0 entry are
+/// introduced only after this invariant is established.
+///
+/// # Errors
+/// Returns [`VSpaceError::HardwareFault`] when allocating, activating, observing
+/// or restoring either root fails.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+pub fn handoff_selftest(frames: &mut FrameAllocator) -> Result<(), VSpaceError> {
+    let previous_root = paging::active_root();
+    let mut maps = [Mapping::EMPTY; 1];
+    let cloned =
+        HwVSpace::clone_kernel_root(&mut maps, frames).ok_or(VSpaceError::HardwareFault)?;
+    let task = TaskControlBlock::new(
+        0x5443_425f_5345_4c46,
+        Capability::new(CapType::CNode, previous_root, 5, Rights::ALL),
+        cloned.root(),
+        hull::user::UserFrame::new(0, 0),
+    )
+    .map_err(|_| VSpaceError::HardwareFault)?;
+
+    // SAFETY: `cloned` is a byte-for-byte copy of the active root's top-level
+    // table and therefore preserves the executing kernel/trap mappings.
+    let guard = unsafe { handoff_to_task(&task) }?;
+    if paging::active_root() != cloned.root() {
+        return Err(VSpaceError::HardwareFault);
+    }
+    // SAFETY: the guard captured `previous_root` directly before this handoff.
+    unsafe { guard.restore() }?;
+    if paging::active_root() != previous_root {
+        return Err(VSpaceError::HardwareFault);
+    }
     Ok(())
 }

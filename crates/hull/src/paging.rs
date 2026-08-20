@@ -102,6 +102,24 @@ impl Mapper {
         })
     }
 
+    /// Clone the active PML4 into a fresh root for a task address space.
+    ///
+    /// Copying only the root shares the existing kernel hierarchy while giving
+    /// the task its own top-level slot array. New user mappings can therefore be
+    /// installed without altering the live kernel root. All copied mappings must
+    /// still cover the current kernel instructions and stack before a handoff.
+    pub fn clone_active_root(alloc: &mut FrameAllocator) -> Option<Mapper> {
+        let root = alloc_zeroed(alloc)?;
+        // SAFETY: the active root and fresh frame are identity-reachable table
+        // frames; the new root is exclusively owned by this mapper.
+        unsafe {
+            let source = PageTable::from_phys(active_root());
+            let destination = PageTable::from_phys(root);
+            destination.entries.copy_from_slice(&source.entries);
+        }
+        Some(Mapper { pml4: root })
+    }
+
     /// Physical address of the root PML4; load it into CR3 to activate.
     pub fn root(&self) -> u64 {
         self.pml4
@@ -362,6 +380,23 @@ pub fn active_root() -> u64 {
         core::arch::asm!(include_str!("asm_fragments/paging-inline-07.s"), out(reg) cr3, options(nomem, nostack, preserves_flags));
     }
     cr3 & ADDR_MASK
+}
+
+/// Load a prepared task address-space root into CR3.
+///
+/// # Safety
+/// `root` must be a valid, aligned PML4 that maps the current kernel code,
+/// stack, interrupt/trap entry path and all tables needed until the caller
+/// restores a known-good root. A malformed or incomplete root faults instantly.
+pub unsafe fn activate_root(root: u64) {
+    // SAFETY: the caller establishes the complete live-mapping precondition.
+    unsafe {
+        core::arch::asm!(
+            include_str!("asm_fragments/paging-inline-01.s"),
+            in(reg) root,
+            options(nostack, preserves_flags)
+        );
+    }
 }
 
 /// Invalidate the TLB entry for the 4 KiB page containing `va` in the active

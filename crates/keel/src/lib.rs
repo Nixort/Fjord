@@ -181,6 +181,15 @@ pub fn kmain(boot: &BootInfo) -> ! {
         Err(e) => hull::kprintln!("keel: WARNING vspace<->hull self-test failed: {e:?}"),
     }
 
+    // Live task-VSpace handoff: switch to a cloned task root and immediately
+    // restore the kernel root. This establishes the CR3/TTBR0 safety contract
+    // before a later slice enters userspace on a per-task VSpace.
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    match vspace::handoff_selftest(&mut frames) {
+        Ok(()) => hull::kprintln!("keel: task vspace handoff -> activate/restore root OK"),
+        Err(e) => hull::kprintln!("keel: WARNING task vspace handoff failed: {e:?}"),
+    }
+
     match ipc::selftest() {
         Ok(()) => hull::kprintln!("keel: ipc self-test -> ntfn/endpoint/vmring OK"),
         Err(e) => hull::kprintln!("keel: WARNING ipc self-test failed: {e:?}"),

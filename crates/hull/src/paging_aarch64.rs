@@ -114,6 +114,23 @@ impl Mapper {
         })
     }
 
+    /// Clone the active L0 table into a fresh task address-space root.
+    ///
+    /// The clone shares the existing kernel mappings while allowing a task to
+    /// install distinct user-side roots. Before a handoff the copied hierarchy
+    /// must still map the executing kernel, stack, traps and required MMIO.
+    pub fn clone_active_root(alloc: &mut FrameAllocator) -> Option<Mapper> {
+        let root = alloc_zeroed(alloc)?;
+        // SAFETY: both L0 frames are reachable through the bootstrap identity
+        // map; the new root is uniquely owned by this mapper.
+        unsafe {
+            let source = Table::from_phys(active_root());
+            let destination = Table::from_phys(root);
+            destination.entries.copy_from_slice(&source.entries);
+        }
+        Some(Mapper { root })
+    }
+
     /// Physical address of the root table; load it into TTBR0_EL1 to activate.
     pub fn root(&self) -> u64 {
         self.root
@@ -312,6 +329,24 @@ pub fn active_root() -> u64 {
         );
     }
     ttbr0 & ADDR_MASK
+}
+
+/// Load a prepared task address-space root into TTBR0_EL1 and invalidate stage-1
+/// translations for the old regime.
+///
+/// # Safety
+/// `root` must reference a valid L0 table mapping current kernel instructions,
+/// stack, exception vectors and required MMIO until a known-good root is
+/// restored. An incomplete root makes the next access fault.
+pub unsafe fn activate_root(root: u64) {
+    // SAFETY: the caller establishes the complete live-mapping precondition.
+    unsafe {
+        core::arch::asm!(
+            include_str!("asm_fragments/paging_aarch64-inline-06.s"),
+            root = in(reg) root,
+            options(nostack, preserves_flags),
+        );
+    }
 }
 
 /// Invalidate the TLB entry for the 4 KiB page containing `va` in the active
