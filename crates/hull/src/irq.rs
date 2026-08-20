@@ -56,7 +56,12 @@ pub fn lock() -> IrqGuard {
 #[cfg(target_arch = "x86_64")]
 pub unsafe fn force_enable() {
     // SAFETY: enabling IF on a CPU with a loaded IDT and a valid stack is sound.
-    unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
+    unsafe {
+        core::arch::asm!(
+            include_str!("asm_fragments/irq-inline-06.s"),
+            options(nomem, nostack)
+        )
+    };
 }
 
 /// See the x86_64 [`force_enable`].
@@ -67,7 +72,10 @@ pub unsafe fn force_enable() {
 pub unsafe fn force_enable() {
     // SAFETY: clearing DAIF.I unmasks IRQs; the GIC and vectors are already up.
     unsafe {
-        core::arch::asm!("msr daifclr, #2", options(nomem, nostack, preserves_flags));
+        core::arch::asm!(
+            include_str!("asm_fragments/irq-inline-05.s"),
+            options(nomem, nostack, preserves_flags)
+        );
     }
 }
 
@@ -84,7 +92,7 @@ unsafe fn mask_and_save() -> u64 {
     // SAFETY: pushfq/pop copy RFLAGS into a scratch register; cli then clears
     // IF. The sequence touches only the machine stack and the output register.
     unsafe {
-        core::arch::asm!("pushfq", "pop {f}", "cli", f = out(reg) flags, options(nomem));
+        core::arch::asm!(include_str!("asm_fragments/irq-inline-04.s"), f = out(reg) flags, options(nomem));
     }
     flags
 }
@@ -94,7 +102,12 @@ unsafe fn restore(token: u64) {
     // Re-enable interrupts only if IF (RFLAGS bit 9) was set when we masked.
     if token & (1 << 9) != 0 {
         // SAFETY: restoring the prior interrupt-enable state on this CPU.
-        unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
+        unsafe {
+            core::arch::asm!(
+                include_str!("asm_fragments/irq-inline-03.s"),
+                options(nomem, nostack)
+            )
+        };
     }
 }
 
@@ -103,9 +116,7 @@ unsafe fn mask_and_save() -> u64 {
     let daif: u64;
     // SAFETY: snapshot DAIF, then set the I bit (`daifset #2`) to mask IRQs.
     unsafe {
-        core::arch::asm!(
-            "mrs {d}, daif",
-            "msr daifset, #2",
+        core::arch::asm!(include_str!("asm_fragments/irq-inline-02.s"),
             d = out(reg) daif,
             options(nomem, nostack, preserves_flags),
         );
@@ -117,8 +128,7 @@ unsafe fn mask_and_save() -> u64 {
 unsafe fn restore(token: u64) {
     // SAFETY: restore the exact DAIF snapshot taken in `mask_and_save`.
     unsafe {
-        core::arch::asm!(
-            "msr daif, {d}",
+        core::arch::asm!(include_str!("asm_fragments/irq-inline-01.s"),
             d = in(reg) token,
             options(nomem, nostack, preserves_flags),
         );

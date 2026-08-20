@@ -231,11 +231,7 @@ unsafe fn flush_tlb_4k(va: u64) {
     let arg = va >> 12;
     // SAFETY: TLB maintenance is sound; see the function contract.
     unsafe {
-        asm!(
-            "dsb ishst",
-            "tlbi vaae1is, {arg}",
-            "dsb ish",
-            "isb",
+        asm!(include_str!("asm_fragments/paging_aarch64-inline-05.s"),
             arg = in(reg) arg,
             options(nostack, preserves_flags),
         );
@@ -310,8 +306,7 @@ pub fn active_root() -> u64 {
     let ttbr0: u64;
     // SAFETY: reading TTBR0_EL1 has no side effects.
     unsafe {
-        core::arch::asm!(
-            "mrs {}, ttbr0_el1",
+        core::arch::asm!(include_str!("asm_fragments/paging_aarch64-inline-04.s"),
             out(reg) ttbr0,
             options(nomem, nostack, preserves_flags),
         );
@@ -511,15 +506,7 @@ unsafe fn activate(root: u64) {
     // SAFETY: programming translation control and barriers at EL1; `root`
     // satisfies the mapping requirements documented above.
     unsafe {
-        asm!(
-            "msr mair_el1, {mair}",
-            "msr tcr_el1, {tcr}",
-            "msr ttbr0_el1, {root}",
-            "dsb ish",
-            "tlbi vmalle1",
-            "dsb ish",
-            "ic iallu",
-            "isb",
+        asm!(include_str!("asm_fragments/paging_aarch64-inline-03.s"),
             mair = in(reg) mair,
             tcr = in(reg) tcr,
             root = in(reg) root,
@@ -527,13 +514,11 @@ unsafe fn activate(root: u64) {
         );
 
         let mut sctlr: u64;
-        asm!("mrs {}, sctlr_el1", out(reg) sctlr, options(nomem, nostack, preserves_flags));
+        asm!(include_str!("asm_fragments/paging_aarch64-inline-02.s"), out(reg) sctlr, options(nomem, nostack, preserves_flags));
         sctlr |= 1 << 0; // M: enable stage-1 MMU
         sctlr |= 1 << 2; // C: data + unified cache
         sctlr |= 1 << 12; // I: instruction cache
-        asm!(
-            "msr sctlr_el1, {sctlr}",
-            "isb",
+        asm!(include_str!("asm_fragments/paging_aarch64-inline-01.s"),
             sctlr = in(reg) sctlr,
             options(nostack, preserves_flags),
         );

@@ -67,7 +67,7 @@ fn cntfrq() -> u64 {
     let v: u64;
     // SAFETY: CNTFRQ_EL0 is readable at EL1 and has no side effects.
     unsafe {
-        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) v, options(nomem, nostack, preserves_flags));
+        core::arch::asm!(include_str!("asm_fragments/gic-inline-04.s"), out(reg) v, options(nomem, nostack, preserves_flags));
     }
     v
 }
@@ -77,7 +77,7 @@ unsafe fn set_timer_tval(ticks: u64) {
     // SAFETY: writing CNTP_TVAL_EL0 re-arms the EL1 physical timer
     // (CompareValue = PhysicalCount + ticks) and deasserts a pending tick.
     unsafe {
-        core::arch::asm!("msr cntp_tval_el0, {}", in(reg) ticks, options(nomem, nostack, preserves_flags));
+        core::arch::asm!(include_str!("asm_fragments/gic-inline-03.s"), in(reg) ticks, options(nomem, nostack, preserves_flags));
     }
 }
 
@@ -86,7 +86,7 @@ unsafe fn set_timer_ctl(val: u64) {
     // SAFETY: CNTP_CTL_EL0 controls ENABLE (bit 0) and IMASK (bit 1) of the
     // EL1 physical timer.
     unsafe {
-        core::arch::asm!("msr cntp_ctl_el0, {}", in(reg) val, options(nomem, nostack, preserves_flags));
+        core::arch::asm!(include_str!("asm_fragments/gic-inline-02.s"), in(reg) val, options(nomem, nostack, preserves_flags));
     }
 }
 
@@ -154,7 +154,10 @@ pub fn init_timer() -> bool {
         // Arm the EL1 physical timer (ENABLE=1, IMASK=0) and unmask IRQs.
         set_timer_tval(interval);
         set_timer_ctl(1);
-        core::arch::asm!("msr daifclr, #2", options(nomem, nostack, preserves_flags));
+        core::arch::asm!(
+            include_str!("asm_fragments/gic-inline-01.s"),
+            options(nomem, nostack, preserves_flags)
+        );
     }
     true
 }
@@ -217,44 +220,4 @@ extern "C" fn fjord_aarch64_irq() {
 // those of whichever thread was interrupted most recently. Without this,
 // preemptive switching erets to a stale PC and faults. (x86_64 is immune
 // because its iretq frame lives on the stack.)
-core::arch::global_asm!(
-    r#"
-.section .text.vectors, "ax"
-.global el1_irq
-el1_irq:
-    sub     sp, sp, #192
-    stp     x0,  x1,  [sp, #16*0]
-    stp     x2,  x3,  [sp, #16*1]
-    stp     x4,  x5,  [sp, #16*2]
-    stp     x6,  x7,  [sp, #16*3]
-    stp     x8,  x9,  [sp, #16*4]
-    stp     x10, x11, [sp, #16*5]
-    stp     x12, x13, [sp, #16*6]
-    stp     x14, x15, [sp, #16*7]
-    stp     x16, x17, [sp, #16*8]
-    stp     x18, x29, [sp, #16*9]
-    mrs     x0, elr_el1
-    mrs     x1, spsr_el1
-    stp     x0,  x1,  [sp, #16*10]
-    str     x30, [sp, #16*11]
-
-    bl      fjord_aarch64_irq
-
-    ldp     x0,  x1,  [sp, #16*10]
-    msr     elr_el1, x0
-    msr     spsr_el1, x1
-    ldp     x0,  x1,  [sp, #16*0]
-    ldp     x2,  x3,  [sp, #16*1]
-    ldp     x4,  x5,  [sp, #16*2]
-    ldp     x6,  x7,  [sp, #16*3]
-    ldp     x8,  x9,  [sp, #16*4]
-    ldp     x10, x11, [sp, #16*5]
-    ldp     x12, x13, [sp, #16*6]
-    ldp     x14, x15, [sp, #16*7]
-    ldp     x16, x17, [sp, #16*8]
-    ldp     x18, x29, [sp, #16*9]
-    ldr     x30, [sp, #16*11]
-    add     sp, sp, #192
-    eret
-"#
-);
+core::arch::global_asm!(include_str!("asm_fragments/gic-global-01.s"));

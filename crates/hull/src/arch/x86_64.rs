@@ -330,19 +330,7 @@ unsafe fn load_gdt() {
     // SAFETY: pointer references the static GDT above. Segment reload installs
     // the new code/data descriptors for subsequent Rust code.
     unsafe {
-        asm!(
-            "lgdt [{gdt}]",
-            "push {code}",
-            "lea rax, [rip + 2f]",
-            "push rax",
-            "retfq",
-            "2:",
-            "mov ax, {data}",
-            "mov ds, ax",
-            "mov es, ax",
-            "mov ss, ax",
-            "mov fs, ax",
-            "mov gs, ax",
+        asm!(include_str!("../asm_fragments/arch-x86_64-inline-04.s"),
             gdt = in(reg) &pointer,
             code = const KERNEL_CODE_SELECTOR as u64,
             data = const KERNEL_DATA_SELECTOR,
@@ -355,7 +343,7 @@ unsafe fn load_gdt() {
 unsafe fn load_tss() {
     // SAFETY: TSS descriptor is present in the loaded GDT.
     unsafe {
-        asm!("ltr ax", in("ax") TSS_SELECTOR, options(nomem, nostack, preserves_flags));
+        asm!(include_str!("../asm_fragments/arch-x86_64-inline-03.s"), in("ax") TSS_SELECTOR, options(nomem, nostack, preserves_flags));
     }
 }
 
@@ -366,7 +354,7 @@ unsafe fn load_idt() {
     };
     // SAFETY: pointer references the static IDT above.
     unsafe {
-        asm!("lidt [{idt}]", idt = in(reg) &pointer, options(readonly, nostack, preserves_flags));
+        asm!(include_str!("../asm_fragments/arch-x86_64-inline-02.s"), idt = in(reg) &pointer, options(readonly, nostack, preserves_flags));
     }
 }
 
@@ -541,89 +529,7 @@ pub unsafe fn user_run(frame: *mut UserFrame) {
     unsafe { fjord_user_run(frame) }
 }
 
-global_asm!(
-    r#"
-.global fjord_user_run
-fjord_user_run:
-    // rdi = *mut UserFrame.
-    // Save kernel callee-saved state + flags, stash rsp and the frame pointer.
-    push rbp
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-    pushfq
-    mov [rip + FJORD_KERNEL_RSP], rsp
-    mov [rip + FJORD_CURRENT_FRAME], rdi
-    // Build the iretq frame for ring 3 (rax is a scratch; loaded for real below).
-    push 0x33                 // user SS (GDT index 6 | RPL 3)
-    mov rax, [rdi + 0x88]
-    push rax                  // user RSP
-    mov rax, [rdi + 0x80]
-    push rax                  // RFLAGS
-    push 0x2b                 // user CS (GDT index 5 | RPL 3)
-    mov rax, [rdi + 0x78]
-    push rax                  // user RIP
-    // Load the user GPRs from the frame (rdi last, since it is the base).
-    mov rax, [rdi + 0x00]
-    mov rbx, [rdi + 0x08]
-    mov rcx, [rdi + 0x10]
-    mov rdx, [rdi + 0x18]
-    mov rsi, [rdi + 0x20]
-    mov rbp, [rdi + 0x30]
-    mov r8,  [rdi + 0x38]
-    mov r9,  [rdi + 0x40]
-    mov r10, [rdi + 0x48]
-    mov r11, [rdi + 0x50]
-    mov r12, [rdi + 0x58]
-    mov r13, [rdi + 0x60]
-    mov r14, [rdi + 0x68]
-    mov r15, [rdi + 0x70]
-    mov rdi, [rdi + 0x28]
-    iretq
-
-.global fjord_user_syscall_isr
-fjord_user_syscall_isr:
-    // Entered from ring 3 via int 0x80 on the TSS.rsp0 stack. The CPU pushed
-    // [rip, cs, rflags, user_rsp, ss]; save the full ring-3 state into the
-    // current frame, then unwind back into the user_run caller.
-    push rax                       // [rsp] = user rax; iret frame now at [rsp+8]
-    mov rax, [rip + FJORD_CURRENT_FRAME]
-    mov [rax + 0x08], rbx
-    mov [rax + 0x10], rcx
-    mov [rax + 0x18], rdx
-    mov [rax + 0x20], rsi
-    mov [rax + 0x28], rdi
-    mov [rax + 0x30], rbp
-    mov [rax + 0x38], r8
-    mov [rax + 0x40], r9
-    mov [rax + 0x48], r10
-    mov [rax + 0x50], r11
-    mov [rax + 0x58], r12
-    mov [rax + 0x60], r13
-    mov [rax + 0x68], r14
-    mov [rax + 0x70], r15
-    mov rcx, [rsp]                 // user rax
-    mov [rax + 0x00], rcx
-    mov rcx, [rsp + 0x08]          // rip
-    mov [rax + 0x78], rcx
-    mov rcx, [rsp + 0x18]          // rflags
-    mov [rax + 0x80], rcx
-    mov rcx, [rsp + 0x20]          // user rsp
-    mov [rax + 0x88], rcx
-    // Unwind to the kernel (mirror of fjord_user_run's prologue).
-    mov rsp, [rip + FJORD_KERNEL_RSP]
-    popfq
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    pop rbp
-    ret
-"#
-);
+global_asm!(include_str!("../asm_fragments/arch-x86_64-global-02.s"));
 
 /// Rust exception entry point called by the assembly common stub.
 #[no_mangle]
@@ -648,82 +554,12 @@ fn halt_forever() -> ! {
     loop {
         // SAFETY: `hlt` is the architectural low-power idle instruction.
         unsafe {
-            asm!("cli; hlt", options(nomem, nostack, preserves_flags));
+            asm!(
+                include_str!("../asm_fragments/arch-x86_64-inline-01.s"),
+                options(nomem, nostack, preserves_flags)
+            );
         }
     }
 }
 
-global_asm!(
-    r#"
-.macro ISR_NOERR vec name
-.global \name
-\name:
-    push 0
-    push \vec
-    jmp fjord_isr_common
-.endm
-
-.macro ISR_ERR vec name
-.global \name
-\name:
-    push \vec
-    jmp fjord_isr_common
-.endm
-
-ISR_NOERR 0,  fjord_isr_00
-ISR_NOERR 1,  fjord_isr_01
-ISR_NOERR 2,  fjord_isr_02
-ISR_NOERR 3,  fjord_isr_03
-ISR_NOERR 4,  fjord_isr_04
-ISR_NOERR 5,  fjord_isr_05
-ISR_NOERR 6,  fjord_isr_06
-ISR_NOERR 7,  fjord_isr_07
-ISR_ERR   8,  fjord_isr_08
-ISR_NOERR 9,  fjord_isr_09
-ISR_ERR   10, fjord_isr_10
-ISR_ERR   11, fjord_isr_11
-ISR_ERR   12, fjord_isr_12
-ISR_ERR   13, fjord_isr_13
-ISR_ERR   14, fjord_isr_14
-ISR_NOERR 15, fjord_isr_15
-ISR_NOERR 16, fjord_isr_16
-ISR_ERR   17, fjord_isr_17
-ISR_NOERR 18, fjord_isr_18
-ISR_NOERR 19, fjord_isr_19
-ISR_NOERR 20, fjord_isr_20
-ISR_ERR   21, fjord_isr_21
-ISR_NOERR 22, fjord_isr_22
-ISR_NOERR 23, fjord_isr_23
-ISR_NOERR 24, fjord_isr_24
-ISR_NOERR 25, fjord_isr_25
-ISR_NOERR 26, fjord_isr_26
-ISR_NOERR 27, fjord_isr_27
-ISR_NOERR 28, fjord_isr_28
-ISR_ERR   29, fjord_isr_29
-ISR_ERR   30, fjord_isr_30
-ISR_NOERR 31, fjord_isr_31
-
-.global fjord_isr_common
-fjord_isr_common:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rbp
-    push rdi
-    push rsi
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-
-    mov rdi, rsp
-    call fjord_exception_entry
-
-    ud2
-"#
-);
+global_asm!(include_str!("../asm_fragments/arch-x86_64-global-01.s"));

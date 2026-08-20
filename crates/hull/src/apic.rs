@@ -79,7 +79,7 @@ unsafe extern "C" {
 unsafe fn outb(port: u16, value: u8) {
     // SAFETY: caller upholds port validity.
     unsafe {
-        asm!("out dx, al", in("dx") port, in("al") value,
+        asm!(include_str!("asm_fragments/apic-inline-04.s"), in("dx") port, in("al") value,
              options(nomem, nostack, preserves_flags));
     }
 }
@@ -93,7 +93,7 @@ unsafe fn rdmsr(msr: u32) -> u64 {
     let hi: u32;
     // SAFETY: caller upholds MSR validity.
     unsafe {
-        asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi,
+        asm!(include_str!("asm_fragments/apic-inline-03.s"), in("ecx") msr, out("eax") lo, out("edx") hi,
              options(nomem, nostack, preserves_flags));
     }
     ((hi as u64) << 32) | (lo as u64)
@@ -108,7 +108,7 @@ unsafe fn wrmsr(msr: u32, value: u64) {
     let hi = (value >> 32) as u32;
     // SAFETY: caller upholds MSR validity.
     unsafe {
-        asm!("wrmsr", in("ecx") msr, in("eax") lo, in("edx") hi,
+        asm!(include_str!("asm_fragments/apic-inline-02.s"), in("ecx") msr, in("eax") lo, in("edx") hi,
              options(nomem, nostack, preserves_flags));
     }
 }
@@ -192,7 +192,10 @@ pub fn init_timer(kernel_pml4: u64, alloc: &mut FrameAllocator) -> bool {
         crate::kprintln!("hull: local APIC #{id} enabled @ {base:#x}; legacy PIC masked");
 
         // Let the timer fire.
-        asm!("sti", options(nomem, nostack));
+        asm!(
+            include_str!("asm_fragments/apic-inline-01.s"),
+            options(nomem, nostack)
+        );
     }
     true
 }
@@ -269,57 +272,4 @@ extern "C" fn fjord_irq_dispatch(_frame: u64) {
 // arch::x86_64 (which halt), these preserve all GP registers, call the Rust
 // dispatcher with a 16-byte-aligned stack, restore state and `iretq`. The
 // spurious stub returns immediately without an EOI (none is owed).
-core::arch::global_asm!(
-    r#"
-.global fjord_timer_isr
-fjord_timer_isr:
-    push 0x40
-    jmp fjord_irq_common
-
-.global fjord_spurious_isr
-fjord_spurious_isr:
-    iretq
-
-.global fjord_irq_common
-fjord_irq_common:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rbp
-    push rdi
-    push rsi
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-
-    sub rsp, 8
-    lea rdi, [rsp + 8]
-    call fjord_irq_dispatch
-    add rsp, 8
-
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rsi
-    pop rdi
-    pop rbp
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-
-    add rsp, 8
-    iretq
-"#
-);
+core::arch::global_asm!(include_str!("asm_fragments/apic-global-01.s"));

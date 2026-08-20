@@ -313,11 +313,17 @@ fn idle() -> ! {
         // SAFETY: `hlt`/`wfi` halt until the next interrupt; other targets spin.
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+            core::arch::asm!(
+                include_str!("asm/x86_64/hlt.s"),
+                options(nomem, nostack, preserves_flags)
+            );
         }
         #[cfg(target_arch = "aarch64")]
         unsafe {
-            core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
+            core::arch::asm!(
+                include_str!("asm/aarch64/wfi.s"),
+                options(nomem, nostack, preserves_flags)
+            );
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         core::hint::spin_loop();

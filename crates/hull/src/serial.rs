@@ -40,8 +40,12 @@ mod imp {
     unsafe fn outb(port: u16, value: u8) {
         // SAFETY: `out` to a known UART port; caller upholds port validity.
         unsafe {
-            asm!("out dx, al", in("dx") port, in("al") value,
-                 options(nomem, nostack, preserves_flags));
+            asm!(
+                include_str!("asm/x86_64/outb.s"),
+                in("dx") port,
+                in("al") value,
+                options(nomem, nostack, preserves_flags)
+            );
         }
     }
 
@@ -53,8 +57,12 @@ mod imp {
         let value: u8;
         // SAFETY: `in` from a known UART port; caller upholds port validity.
         unsafe {
-            asm!("in al, dx", out("al") value, in("dx") port,
-                 options(nomem, nostack, preserves_flags));
+            asm!(
+                include_str!("asm/x86_64/inb.s"),
+                out("al") value,
+                in("dx") port,
+                options(nomem, nostack, preserves_flags)
+            );
         }
         value
     }

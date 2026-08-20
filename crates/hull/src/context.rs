@@ -123,27 +123,7 @@ mod x86 {
         }
     }
 
-    global_asm!(
-        r#"
-.global fjord_ctx_switch
-fjord_ctx_switch:
-    mov [rdi + 0x00], rsp
-    mov [rdi + 0x08], rbx
-    mov [rdi + 0x10], rbp
-    mov [rdi + 0x18], r12
-    mov [rdi + 0x20], r13
-    mov [rdi + 0x28], r14
-    mov [rdi + 0x30], r15
-    mov rsp, [rsi + 0x00]
-    mov rbx, [rsi + 0x08]
-    mov rbp, [rsi + 0x10]
-    mov r12, [rsi + 0x18]
-    mov r13, [rsi + 0x20]
-    mov r14, [rsi + 0x28]
-    mov r15, [rsi + 0x30]
-    ret
-"#
-    );
+    global_asm!(include_str!("asm_fragments/context-global-02.s"));
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -248,27 +228,5 @@ mod arm {
         }
     }
 
-    global_asm!(
-        r#"
-.global fjord_ctx_switch
-fjord_ctx_switch:
-    mov x2, sp
-    str x2,  [x0, #0x00]
-    stp x19, x20, [x0, #0x08]
-    stp x21, x22, [x0, #0x18]
-    stp x23, x24, [x0, #0x28]
-    stp x25, x26, [x0, #0x38]
-    stp x27, x28, [x0, #0x48]
-    stp x29, x30, [x0, #0x58]
-    ldr x2,  [x1, #0x00]
-    mov sp, x2
-    ldp x19, x20, [x1, #0x08]
-    ldp x21, x22, [x1, #0x18]
-    ldp x23, x24, [x1, #0x28]
-    ldp x25, x26, [x1, #0x38]
-    ldp x27, x28, [x1, #0x48]
-    ldp x29, x30, [x1, #0x58]
-    ret
-"#
-    );
+    global_asm!(include_str!("asm_fragments/context-global-01.s"));
 }

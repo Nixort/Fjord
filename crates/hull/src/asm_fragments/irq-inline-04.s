@@ -1,0 +1,3 @@
+pushfq
+pop {f}
+cli

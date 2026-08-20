@@ -302,7 +302,7 @@ const fn leaf_flags(writable: bool, executable: bool) -> u64 {
 unsafe fn flush_tlb_4k(va: u64) {
     // SAFETY: TLB invalidation is sound; see the function contract.
     unsafe {
-        core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
+        core::arch::asm!(include_str!("asm_fragments/paging-inline-08.s"), in(reg) va, options(nostack, preserves_flags));
     }
 }
 
@@ -359,7 +359,7 @@ pub fn active_root() -> u64 {
     let cr3: u64;
     // SAFETY: reading CR3 has no side effects.
     unsafe {
-        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
+        core::arch::asm!(include_str!("asm_fragments/paging-inline-07.s"), out(reg) cr3, options(nomem, nostack, preserves_flags));
     }
     cr3 & ADDR_MASK
 }
@@ -456,7 +456,7 @@ pub fn map_mmio_page(kernel_pml4: u64, phys: u64, alloc: &mut FrameAllocator) ->
     }
     // SAFETY: invalidate any stale TLB entry for the freshly mapped device page.
     unsafe {
-        core::arch::asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags));
+        core::arch::asm!(include_str!("asm_fragments/paging-inline-06.s"), in(reg) page, options(nostack, preserves_flags));
     }
     Some(page)
 }
@@ -569,19 +569,19 @@ unsafe fn activate(pml4_phys: u64) {
         const IA32_EFER: u32 = 0xC000_0080;
         let mut lo: u32;
         let hi: u32;
-        asm!("rdmsr", in("ecx") IA32_EFER, out("eax") lo, out("edx") hi,
+        asm!(include_str!("asm_fragments/paging-inline-05.s"), in("ecx") IA32_EFER, out("eax") lo, out("edx") hi,
              options(nostack, preserves_flags));
         lo |= 1 << 11;
-        asm!("wrmsr", in("ecx") IA32_EFER, in("eax") lo, in("edx") hi,
+        asm!(include_str!("asm_fragments/paging-inline-04.s"), in("ecx") IA32_EFER, in("eax") lo, in("edx") hi,
              options(nostack, preserves_flags));
 
         // CR0.WP (bit 16): ring-0 writes honour read-only pages.
         let mut cr0: u64;
-        asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
+        asm!(include_str!("asm_fragments/paging-inline-03.s"), out(reg) cr0, options(nomem, nostack, preserves_flags));
         cr0 |= 1 << 16;
-        asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack, preserves_flags));
+        asm!(include_str!("asm_fragments/paging-inline-02.s"), in(reg) cr0, options(nomem, nostack, preserves_flags));
 
         // Switch address space; this flushes the non-global TLB.
-        asm!("mov cr3, {}", in(reg) pml4_phys, options(nostack, preserves_flags));
+        asm!(include_str!("asm_fragments/paging-inline-01.s"), in(reg) pml4_phys, options(nostack, preserves_flags));
     }
 }
