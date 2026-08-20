@@ -99,7 +99,9 @@ pub struct Mapper {
 impl Mapper {
     /// Allocate and zero a fresh PML4, yielding an empty address space.
     pub fn new(alloc: &mut FrameAllocator) -> Option<Mapper> {
-        Some(Mapper { pml4: alloc_zeroed(alloc)? })
+        Some(Mapper {
+            pml4: alloc_zeroed(alloc)?,
+        })
     }
 
     /// Physical address of the root PML4; load it into CR3 to activate.

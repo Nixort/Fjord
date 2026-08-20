@@ -111,7 +111,9 @@ pub struct Mapper {
 impl Mapper {
     /// Allocate and zero a fresh L0 table, yielding an empty address space.
     pub fn new(alloc: &mut FrameAllocator) -> Option<Mapper> {
-        Some(Mapper { root: alloc_zeroed(alloc)? })
+        Some(Mapper {
+            root: alloc_zeroed(alloc)?,
+        })
     }
 
     /// Physical address of the root table; load it into TTBR0_EL1 to activate.
@@ -132,11 +134,7 @@ impl Mapper {
 
     /// Return the next-level table referenced by `table[index]`, creating and
     /// linking a zeroed one if absent.
-    fn ensure_table(
-        table: &mut Table,
-        index: usize,
-        alloc: &mut FrameAllocator,
-    ) -> Option<u64> {
+    fn ensure_table(table: &mut Table, index: usize, alloc: &mut FrameAllocator) -> Option<u64> {
         let entry = table.entries[index];
         if entry & PTE_VALID != 0 {
             return Some(entry & ADDR_MASK);
@@ -510,12 +508,7 @@ unsafe fn activate(root: u64) {
     let mair: u64 = 0x00FF;
     // TCR_EL1 for a single 48-bit TTBR0 region, 4 KiB granule:
     //   T0SZ=16, IRGN0=ORGN0=WB-WA, SH0=inner, TG0=4KiB, EPD1=1, IPS=40-bit.
-    let tcr: u64 = 16
-        | (1 << 8)
-        | (1 << 10)
-        | (0b11 << 12)
-        | (1 << 23)
-        | (0b010 << 32);
+    let tcr: u64 = 16 | (1 << 8) | (1 << 10) | (0b11 << 12) | (1 << 23) | (0b010 << 32);
 
     // SAFETY: programming translation control and barriers at EL1; `root`
     // satisfies the mapping requirements documented above.

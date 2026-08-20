@@ -46,7 +46,11 @@ fn run() -> Result<(), String> {
     }
 
     let cmd = args.first().cloned().unwrap_or_else(|| "help".to_owned());
-    let rest = if args.is_empty() { Vec::new() } else { args[1..].to_vec() };
+    let rest = if args.is_empty() {
+        Vec::new()
+    } else {
+        args[1..].to_vec()
+    };
 
     match cmd.as_str() {
         "build" => build_kernel(&rest),
@@ -145,7 +149,9 @@ fn profile_from_args(args: &[String]) -> Result<String, String> {
 
     match profile.as_str() {
         "dev" | "release" => Ok(profile),
-        other => Err(format!("unsupported profile `{other}` (expected dev|release)")),
+        other => Err(format!(
+            "unsupported profile `{other}` (expected dev|release)"
+        )),
     }
 }
 
@@ -178,7 +184,11 @@ fn cargo_kernel_command(root: &Path, verb: &str, profile: &str) -> Result<Runner
 }
 
 fn kernel_path(root: &Path, profile: &str) -> PathBuf {
-    let cargo_profile_dir = if profile == "release" { "release" } else { "debug" };
+    let cargo_profile_dir = if profile == "release" {
+        "release"
+    } else {
+        "debug"
+    };
     root.join("target")
         .join(TARGET_TRIPLE)
         .join(cargo_profile_dir)
@@ -245,7 +255,9 @@ fn render_command(command: &Command) -> String {
 
 fn render_arg(arg: &OsStr) -> String {
     let s = arg.to_string_lossy();
-    if s.chars().all(|c| c.is_ascii_alphanumeric() || "-_=./+".contains(c)) {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_=./+".contains(c))
+    {
         s.into_owned()
     } else {
         format!("'{s}'")

@@ -75,7 +75,10 @@ pub fn verify_inclusion(
     if checkpoint.tree_size == 0 || proof.leaf_index >= checkpoint.tree_size {
         return Err(LogbookError::BadCheckpoint);
     }
-    if revocations.iter().any(|r| merkle::eq(&r.leaf_hash, leaf_hash)) {
+    if revocations
+        .iter()
+        .any(|r| merkle::eq(&r.leaf_hash, leaf_hash))
+    {
         return Err(LogbookError::Revoked);
     }
 

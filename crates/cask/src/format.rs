@@ -58,7 +58,9 @@ impl Section {
     /// Validates that `self` lies fully within an image of `total` bytes,
     /// using checked arithmetic so a crafted `offset + len` cannot wrap.
     fn end(self) -> Result<u64, CaskError> {
-        self.offset.checked_add(self.len).ok_or(CaskError::Malformed)
+        self.offset
+            .checked_add(self.len)
+            .ok_or(CaskError::Malformed)
     }
 
     fn end_within(self, total: u64) -> Result<(), CaskError> {
@@ -121,7 +123,6 @@ fn rd_u64(b: &[u8], off: usize) -> u64 {
     a.copy_from_slice(&b[off..off + 8]);
     u64::from_le_bytes(a)
 }
-
 
 fn validate_section_table(header: &Header, total: u64) -> Result<(), CaskError> {
     let sections = [header.lading, header.body, header.signature, header.logbook];
@@ -428,7 +429,6 @@ mod tests {
         image[112..120].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(matches!(Cask::parse(&image), Err(CaskError::Malformed)));
     }
-
 
     #[test]
     fn rejects_overlapping_sections() {

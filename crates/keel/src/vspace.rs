@@ -211,7 +211,12 @@ pub fn selftest() -> Result<(), VSpaceError> {
     if vs.map(0x1000, untyped) != Err(VSpaceError::NotAPage) {
         return Err(VSpaceError::NotAPage);
     }
-    let no_rights = Capability::new(CapType::Page, 0x4020_0000, u64::from(PAGE_BITS), Rights::NONE);
+    let no_rights = Capability::new(
+        CapType::Page,
+        0x4020_0000,
+        u64::from(PAGE_BITS),
+        Rights::NONE,
+    );
     if vs.map(0x1000, no_rights) != Err(VSpaceError::NoRights) {
         return Err(VSpaceError::NoRights);
     }
@@ -310,7 +315,14 @@ impl<'maps> HwVSpace<'maps> {
         let rights = page.rights();
         let writable = rights.contains(Rights::WRITE);
         let executable = rights.contains(Rights::EXECUTE);
-        if !paging::map_page(&mut self.mapper, va, page.object(), writable, executable, alloc) {
+        if !paging::map_page(
+            &mut self.mapper,
+            va,
+            page.object(),
+            writable,
+            executable,
+            alloc,
+        ) {
             return Err(VSpaceError::HardwareFault);
         }
         // The hardware leaf is in place; record the bookkeeping entry. This

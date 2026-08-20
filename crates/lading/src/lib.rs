@@ -125,7 +125,9 @@ impl License {
     /// Returns true if the license covers `requested`.
     #[must_use]
     pub fn allows(&self, requested: &CapRequest) -> bool {
-        self.allowed_caps.iter().any(|allowed| allowed.allows(requested))
+        self.allowed_caps
+            .iter()
+            .any(|allowed| allowed.allows(requested))
     }
 }
 

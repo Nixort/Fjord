@@ -19,8 +19,8 @@
 #![allow(dead_code)]
 extern crate alloc;
 
-pub mod keys;
 pub mod aead;
+pub mod keys;
 
 /// AEAD cipher selection. XChaCha20 in software, AES-256-GCM with AES-NI.
 #[derive(Clone, Copy, Debug)]

@@ -397,7 +397,6 @@ pub fn selftest() -> Result<(), IpcError> {
         return Err(IpcError::QueueFull);
     }
 
-
     let mut zero_ep_storage: [Waiter; 0] = [];
     let mut zero_ep = Endpoint::new(&mut zero_ep_storage);
     if !matches!(zero_ep.send(1, Message::empty()), Err(IpcError::QueueFull)) {
@@ -420,7 +419,12 @@ pub fn selftest() -> Result<(), IpcError> {
     // --- VmRing: fill, detect full, drain, detect empty (FIFO order). ---
 
     let mut zero = VmRing::new(0);
-    if zero.capacity() != 0 || !zero.is_empty() || zero.is_full() || zero.push().is_some() || zero.pop().is_some() {
+    if zero.capacity() != 0
+        || !zero.is_empty()
+        || zero.is_full()
+        || zero.push().is_some()
+        || zero.pop().is_some()
+    {
         return Err(IpcError::QueueFull);
     }
 

@@ -61,7 +61,15 @@ mod x86 {
         /// [`switch`] into it.
         #[must_use]
         pub const fn zeroed() -> Self {
-            Self { sp: 0, rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0 }
+            Self {
+                sp: 0,
+                rbx: 0,
+                rbp: 0,
+                r12: 0,
+                r13: 0,
+                r14: 0,
+                r15: 0,
+            }
         }
     }
 
@@ -104,11 +112,7 @@ mod x86 {
     /// `ctx` must be writable. `stack_top` must be the top address of an owned
     /// stack region with at least a few KiB of usable space below it; `entry`
     /// runs on that stack and must never return.
-    pub unsafe fn init_context(
-        ctx: *mut Context,
-        stack_top: usize,
-        entry: extern "C" fn() -> !,
-    ) {
+    pub unsafe fn init_context(ctx: *mut Context, stack_top: usize, entry: extern "C" fn() -> !) {
         // 16-byte align the stack and place the entry address so the switch's
         // terminating `ret` pops it into rip. After that `ret`, rsp == sp + 8,
         // matching the (rsp % 16 == 8) state the ABI expects at a fn entry.
@@ -235,11 +239,7 @@ mod arm {
     /// `ctx` must be writable. `stack_top` must be the top address of an owned
     /// stack region with at least a few KiB of usable space below it; `entry`
     /// runs on that stack and must never return.
-    pub unsafe fn init_context(
-        ctx: *mut Context,
-        stack_top: usize,
-        entry: extern "C" fn() -> !,
-    ) {
+    pub unsafe fn init_context(ctx: *mut Context, stack_top: usize, entry: extern "C" fn() -> !) {
         // aarch64 requires a 16-byte aligned SP; the entry address rides in lr.
         let sp = stack_top & !0xF;
         // SAFETY: `ctx` is writable and `sp` names the top of an owned stack.

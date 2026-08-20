@@ -25,13 +25,13 @@ use hull::mmu::{FrameAllocator, FRAME_SIZE};
 pub mod cap;
 pub mod cdt;
 pub mod cte;
-pub mod vspace;
 pub mod ipc;
 pub mod irqhandler;
 pub mod tide;
 pub mod untyped;
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 pub mod userspace;
+pub mod vspace;
 
 /// Target architecture, resolved at compile time for the boot banner.
 #[cfg(target_arch = "x86_64")]
@@ -87,7 +87,11 @@ pub fn kmain(boot: &BootInfo) -> ! {
     hull::kprintln!("  arch    : {ARCH}");
     hull::kprintln!(
         "  profile : {}",
-        if cfg!(debug_assertions) { "debug" } else { "release" }
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
     );
 
     // Physical memory: log the map, then bring up the early frame allocator.
@@ -223,9 +227,9 @@ pub fn kmain(boot: &BootInfo) -> ! {
     // servicing them.
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     match irqhandler::selftest() {
-        Ok(badge) => hull::kprintln!(
-            "keel: irq-handler self-test -> badge {badge:#x} delivered OK"
-        ),
+        Ok(badge) => {
+            hull::kprintln!("keel: irq-handler self-test -> badge {badge:#x} delivered OK")
+        }
         Err(e) => hull::kprintln!("keel: WARNING irq-handler self-test failed: {e:?}"),
     }
 
@@ -238,16 +242,14 @@ pub fn kmain(boot: &BootInfo) -> ! {
     // slice.
     #[cfg(target_arch = "x86_64")]
     match userspace::selftest(&mut frames) {
-        Ok(v) => hull::kprintln!(
-            "keel: userspace self-test -> ring3 entered, int 0x80 echo {v:#x} OK"
-        ),
+        Ok(v) => {
+            hull::kprintln!("keel: userspace self-test -> ring3 entered, int 0x80 echo {v:#x} OK")
+        }
         Err(e) => hull::kprintln!("keel: WARNING userspace self-test failed: {e:?}"),
     }
     #[cfg(target_arch = "aarch64")]
     match userspace::selftest(&mut frames) {
-        Ok(v) => hull::kprintln!(
-            "keel: userspace self-test -> EL0 entered, svc #0 echo {v:#x} OK"
-        ),
+        Ok(v) => hull::kprintln!("keel: userspace self-test -> EL0 entered, svc #0 echo {v:#x} OK"),
         Err(e) => hull::kprintln!("keel: WARNING userspace self-test failed: {e:?}"),
     }
 
@@ -266,9 +268,7 @@ pub fn kmain(boot: &BootInfo) -> ! {
 fn activate_address_space(frames: &mut FrameAllocator) {
     match hull::paging::init_kernel_address_space(frames) {
         Some(root) => {
-            hull::kprintln!(
-                "keel: kernel address space active — per-section W^X, CR3={root:#x}"
-            );
+            hull::kprintln!("keel: kernel address space active — per-section W^X, CR3={root:#x}");
             if hull::apic::init_timer(root, frames) {
                 hull::kprintln!("keel: local APIC + periodic timer armed (vector 0x40)");
             } else {
@@ -290,9 +290,9 @@ fn activate_address_space(frames: &mut FrameAllocator) {
 fn activate_address_space(frames: &mut FrameAllocator) {
     let ram_top = frames.usable_top();
     match hull::paging::init_kernel_address_space(frames, ram_top) {
-        Some(ttbr0) => hull::kprintln!(
-            "keel: kernel address space active — per-section W^X, TTBR0={ttbr0:#x}"
-        ),
+        Some(ttbr0) => {
+            hull::kprintln!("keel: kernel address space active — per-section W^X, TTBR0={ttbr0:#x}")
+        }
         None => hull::kprintln!(
             "keel: WARNING could not build kernel address space; on bootstrap flat map"
         ),

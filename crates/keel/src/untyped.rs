@@ -240,7 +240,6 @@ pub fn selftest() -> Result<(), RetypeError> {
         return Err(RetypeError::OutOfSpace);
     }
 
-
     // Atomicity: a bad destination range must not advance the watermark.
     let mut tiny_storage = [Capability::NULL; 1];
     let mut tiny = CNode::new(&mut tiny_storage);

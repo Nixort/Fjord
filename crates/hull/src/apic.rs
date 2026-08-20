@@ -123,7 +123,9 @@ unsafe fn wrmsr(msr: u32, value: u64) {
 unsafe fn lapic_write(offset: u32, value: u32) {
     let base = LAPIC_BASE.load(Ordering::Relaxed);
     // SAFETY: `base + offset` is inside the mapped MMIO page.
-    unsafe { core::ptr::write_volatile((base + offset as u64) as *mut u32, value); }
+    unsafe {
+        core::ptr::write_volatile((base + offset as u64) as *mut u32, value);
+    }
 }
 
 /// Read a local APIC register.
@@ -214,7 +216,9 @@ pub fn ticks() -> u64 {
 /// The LAPIC window must be mapped (`init_timer` has run).
 pub unsafe fn rearm_timer() {
     // SAFETY: single MMIO write to the mapped LVT timer register.
-    unsafe { lapic_write(REG_LVT_TIMER, LVT_PERIODIC | TIMER_VECTOR as u32); }
+    unsafe {
+        lapic_write(REG_LVT_TIMER, LVT_PERIODIC | TIMER_VECTOR as u32);
+    }
 }
 
 /// Mask the periodic LAPIC timer so no further ticks are delivered.
@@ -224,7 +228,10 @@ pub unsafe fn rearm_timer() {
 pub unsafe fn mask_timer() {
     // SAFETY: single MMIO write to the mapped LVT timer register.
     unsafe {
-        lapic_write(REG_LVT_TIMER, LVT_MASKED | LVT_PERIODIC | TIMER_VECTOR as u32);
+        lapic_write(
+            REG_LVT_TIMER,
+            LVT_MASKED | LVT_PERIODIC | TIMER_VECTOR as u32,
+        );
     }
 }
 
@@ -238,12 +245,17 @@ extern "C" fn fjord_irq_dispatch(_frame: u64) {
     if n == TICK_DEMO_LIMIT {
         // SAFETY: masking the LVT timer is a single MMIO write to a mapped reg.
         unsafe {
-            lapic_write(REG_LVT_TIMER, LVT_MASKED | LVT_PERIODIC | TIMER_VECTOR as u32);
+            lapic_write(
+                REG_LVT_TIMER,
+                LVT_MASKED | LVT_PERIODIC | TIMER_VECTOR as u32,
+            );
         }
         crate::kprintln!("hull: periodic timer IRQ verified; masking to spare serial");
     }
     // SAFETY: signal end-of-interrupt so the LAPIC can deliver the next one.
-    unsafe { lapic_write(REG_EOI, 0); }
+    unsafe {
+        lapic_write(REG_EOI, 0);
+    }
 
     // Drive the scheduler last, after EOI: a context switch performed by the
     // hook leaves the LAPIC ready to deliver the next tick to whichever thread
@@ -259,7 +271,8 @@ extern "C" fn fjord_irq_dispatch(_frame: u64) {
 // arch::x86_64 (which halt), these preserve all GP registers, call the Rust
 // dispatcher with a 16-byte-aligned stack, restore state and `iretq`. The
 // spurious stub returns immediately without an EOI (none is owed).
-core::arch::global_asm!(r#"
+core::arch::global_asm!(
+    r#"
 .global fjord_timer_isr
 fjord_timer_isr:
     push 0x40
@@ -310,4 +323,5 @@ fjord_irq_common:
 
     add rsp, 8
     iretq
-"#);
+"#
+);

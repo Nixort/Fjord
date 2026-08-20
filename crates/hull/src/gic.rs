@@ -116,7 +116,9 @@ pub unsafe fn rearm_timer() {
 /// The generic timer must have been initialised by [`init_timer`].
 pub unsafe fn disable_timer() {
     // SAFETY: clearing ENABLE stops the EL1 physical timer from firing.
-    unsafe { set_timer_ctl(0); }
+    unsafe {
+        set_timer_ctl(0);
+    }
 }
 
 /// Bring up the GIC v2 and arm the generic-timer periodic tick.
@@ -183,9 +185,7 @@ extern "C" fn fjord_aarch64_irq() {
             if n >= TICK_DEMO_LIMIT {
                 set_timer_ctl(0);
                 if n == TICK_DEMO_LIMIT {
-                    crate::kprintln!(
-                        "hull: periodic timer IRQ verified; masking to spare serial"
-                    );
+                    crate::kprintln!("hull: periodic timer IRQ verified; masking to spare serial");
                 }
             } else {
                 set_timer_tval(INTERVAL.load(Ordering::Relaxed));
@@ -219,7 +219,8 @@ extern "C" fn fjord_aarch64_irq() {
 // those of whichever thread was interrupted most recently. Without this,
 // preemptive switching erets to a stale PC and faults. (x86_64 is immune
 // because its iretq frame lives on the stack.)
-core::arch::global_asm!(r#"
+core::arch::global_asm!(
+    r#"
 .section .text.vectors, "ax"
 .global el1_irq
 el1_irq:
@@ -257,4 +258,5 @@ el1_irq:
     ldr     x30, [sp, #16*11]
     add     sp, sp, #192
     eret
-"#);
+"#
+);

@@ -412,7 +412,10 @@ pub fn selftest() -> Result<(), CteError> {
     let rw = Rights::READ.union(Rights::WRITE);
 
     // Slot 0: a 2 MiB untyped region with full authority.
-    cs.insert_root(0, Capability::new(CapType::Untyped, 0x4020_0000, 21, Rights::ALL))?;
+    cs.insert_root(
+        0,
+        Capability::new(CapType::Untyped, 0x4020_0000, 21, Rights::ALL),
+    )?;
 
     // Retype two read/write pages out of it into slots 1 and 2.
     cs.retype(0, CapType::Page, PAGE_BITS, 2, rw, 1)?;

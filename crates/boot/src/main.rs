@@ -26,9 +26,7 @@
 use core::panic::PanicInfo;
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-core::compile_error!(
-    "the boot shim supports x86_64 (PVH) and aarch64 (QEMU virt) only"
-);
+core::compile_error!("the boot shim supports x86_64 (PVH) and aarch64 (QEMU virt) only");
 
 #[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(include_str!("boot.s"));

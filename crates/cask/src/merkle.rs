@@ -139,7 +139,11 @@ pub fn verify_page_with_count(
             Some(step) => step,
             None => return false,
         };
-        let expected = if idx % 2 == 0 { Side::Right } else { Side::Left };
+        let expected = if idx % 2 == 0 {
+            Side::Right
+        } else {
+            Side::Left
+        };
         if step.side != expected {
             return false;
         }
@@ -300,7 +304,6 @@ mod tests {
             }
         }
     }
-
 
     #[test]
     fn strict_verify_rejects_wrong_shape() {

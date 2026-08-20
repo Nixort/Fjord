@@ -501,8 +501,7 @@ pub unsafe fn parse_dtb(dtb_paddr: u64) -> BootInfo {
                             // lies inside the struct block.
                             let entry = unsafe { struct_ptr.add(reg_off + consumed) };
                             let start = unsafe { fdt_read_cells(entry, addr_cells) };
-                            let size =
-                                unsafe { fdt_read_cells(entry.add(addr_bytes), size_cells) };
+                            let size = unsafe { fdt_read_cells(entry.add(addr_bytes), size_cells) };
                             if size != 0 {
                                 info.regions[info.region_count] = MemoryRegion {
                                     start,
@@ -533,9 +532,7 @@ pub unsafe fn parse_dtb(dtb_paddr: u64) -> BootInfo {
 
                 if depth == 1 {
                     // SAFETY: name compared within the strings block.
-                    if unsafe { fdt_name_eq(strings_ptr, nameoff, b"#address-cells") }
-                        && len >= 4
-                    {
+                    if unsafe { fdt_name_eq(strings_ptr, nameoff, b"#address-cells") } && len >= 4 {
                         // SAFETY: `val_off + 4 <= struct_len` since len >= 4.
                         addr_cells = unsafe { fdt_be_u32(struct_ptr.add(val_off)) };
                     } else if unsafe { fdt_name_eq(strings_ptr, nameoff, b"#size-cells") }
@@ -551,8 +548,7 @@ pub unsafe fn parse_dtb(dtb_paddr: u64) -> BootInfo {
                         have_reg = true;
                     } else if unsafe { fdt_name_eq(strings_ptr, nameoff, b"device_type") } {
                         // SAFETY: value lies within the struct block.
-                        dev_ok =
-                            unsafe { fdt_val_is(struct_ptr.add(val_off), len, b"memory") };
+                        dev_ok = unsafe { fdt_val_is(struct_ptr.add(val_off), len, b"memory") };
                     }
                 }
             }

@@ -54,8 +54,7 @@ pub fn run_tick_hook() {
         // SAFETY: `raw` is non-zero only after `set_tick_hook` stored the
         // address of a real `extern "C" fn()`; the transmute reconstructs that
         // exact function-pointer type from its address.
-        let hook: extern "C" fn() =
-            unsafe { core::mem::transmute::<usize, extern "C" fn()>(raw) };
+        let hook: extern "C" fn() = unsafe { core::mem::transmute::<usize, extern "C" fn()>(raw) };
         hook();
     }
 }

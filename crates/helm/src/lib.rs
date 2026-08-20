@@ -18,8 +18,8 @@
 #![allow(dead_code)]
 extern crate alloc;
 
-pub mod supervise;
 pub mod launch;
+pub mod supervise;
 
 /// Helm entry point, started by Keel with the root capability set.
 ///

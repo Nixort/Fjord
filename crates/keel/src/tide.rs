@@ -153,7 +153,10 @@ impl<'t> Scheduler<'t> {
     /// Number of admitted (non-inactive) threads.
     #[must_use]
     pub fn count(&self) -> usize {
-        self.threads.iter().filter(|t| t.state != RunState::Inactive).count()
+        self.threads
+            .iter()
+            .filter(|t| t.state != RunState::Inactive)
+            .count()
     }
 
     /// Total ticks elapsed since construction.
@@ -311,7 +314,6 @@ pub fn selftest() -> Result<(), SchedError> {
     Ok(())
 }
 
-
 /// Failure modes for the cooperative context-switch self-test.
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -410,7 +412,6 @@ mod ctx {
         Ok(())
     }
 }
-
 
 /// Failure modes for the preemptive timer-driven scheduling self-test.
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]

@@ -299,8 +299,7 @@ impl<'slots> CNode<'slots> {
         if !parent.rights().contains(new_rights) {
             return Err(CapError::RightsEscalation);
         }
-        let derived =
-            Capability::new(parent.cap_type(), parent.object(), parent.arg(), new_rights);
+        let derived = Capability::new(parent.cap_type(), parent.object(), parent.arg(), new_rights);
         self.insert(to, derived)
     }
 
