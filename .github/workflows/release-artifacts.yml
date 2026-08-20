@@ -26,6 +26,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "${{ env.NIGHTLY }}" --profile minimal \
+            --component rust-src \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview \
+            --target x86_64-unknown-none \
+            --target aarch64-unknown-none-softfloat
+          rustup run "${{ env.NIGHTLY }}" rustc -Vv
+
       - name: Cache cargo state
         uses: actions/cache@v6
         with:
