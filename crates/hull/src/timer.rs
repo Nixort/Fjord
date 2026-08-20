@@ -105,8 +105,8 @@ pub fn take_if_expired() -> Option<u64> {
 pub fn selftest() -> Result<(), ()> {
     disarm();
     let start = now_ticks();
-    let deadline = arm_after(3);
-    if expired() || deadline < start {
+    let armed_deadline = arm_after(3);
+    if expired() || armed_deadline < start {
         return Err(());
     }
     advance_ticks(2);
@@ -114,7 +114,7 @@ pub fn selftest() -> Result<(), ()> {
         return Err(());
     }
     advance_ticks(1);
-    if !expired() || take_if_expired() != Some(deadline) || deadline().is_some() {
+    if !expired() || take_if_expired() != Some(armed_deadline) || deadline().is_some() {
         return Err(());
     }
     Ok(())
