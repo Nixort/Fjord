@@ -51,7 +51,9 @@ pedantic = "warn"
 # Reproducible, hardened release profile (see docs/ARCHITECTURE.md §Build).
 [profile.release]
 opt-level = 3
-lto = "fat"
+# Fat LTO makes the x86_64 bare-metal linker reject the release image's BSS.
+# ThinLTO retains cross-crate optimization while producing a valid kernel ELF.
+lto = "thin"
 codegen-units = 1
 panic = "abort"
 overflow-checks = true
