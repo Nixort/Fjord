@@ -374,3 +374,98 @@ mod tests {
         selftest().unwrap();
     }
 }
+
+/// Why a task-table lookup or construction operation was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskTableError {
+    /// No task with the requested kernel-stable ID exists in the table.
+    NotFound,
+    /// The caller attempted to construct a table with duplicate task IDs.
+    DuplicateId,
+}
+
+/// Caller-owned task storage indexed by kernel-stable task ID.
+///
+/// The table is deliberately a simple bounded linear lookup for the first
+/// integration path. It gives IPC one exclusive, checked place to find and
+/// transition blocked peers; ready-queue indexing becomes a separate Tide
+/// optimization after task-aware correctness is established.
+pub struct TaskTable<'tasks> {
+    tasks: &'tasks mut [TaskControlBlock],
+}
+
+impl<'tasks> TaskTable<'tasks> {
+    /// Wraps a unique-ID task slice for kernel use.
+    pub fn new(tasks: &'tasks mut [TaskControlBlock]) -> Result<Self, TaskTableError> {
+        for (i, task) in tasks.iter().enumerate() {
+            if tasks[..i].iter().any(|prior| prior.id == task.id) {
+                return Err(TaskTableError::DuplicateId);
+            }
+        }
+        Ok(Self { tasks })
+    }
+
+    /// Number of stored task control blocks.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Whether the table contains no task control blocks.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    /// Read a task by its kernel-stable ID.
+    pub fn get(&self, id: u64) -> Result<&TaskControlBlock, TaskTableError> {
+        self.tasks
+            .iter()
+            .find(|task| task.id == id)
+            .ok_or(TaskTableError::NotFound)
+    }
+
+    /// Mutably borrow a task by its kernel-stable ID.
+    pub fn get_mut(&mut self, id: u64) -> Result<&mut TaskControlBlock, TaskTableError> {
+        self.tasks
+            .iter_mut()
+            .find(|task| task.id == id)
+            .ok_or(TaskTableError::NotFound)
+    }
+}
+
+#[cfg(test)]
+mod task_table_tests {
+    extern crate std;
+
+    use super::*;
+    use crate::cap::Rights;
+
+    fn task(id: u64) -> TaskControlBlock {
+        let root = Capability::new(CapType::CNode, 0x40_0000 + id * 0x1000, 5, Rights::ALL);
+        TaskControlBlock::new(
+            id,
+            root,
+            0x80_0000 + id * 0x1000,
+            UserFrame::new(0x4000, 0x8000),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn table_requires_unique_ids_and_checked_lookups() {
+        let mut duplicate = [task(1), task(1)];
+        assert_eq!(
+            TaskTable::new(&mut duplicate).err(),
+            Some(TaskTableError::DuplicateId)
+        );
+
+        let mut tasks = [task(1), task(2)];
+        let mut table = TaskTable::new(&mut tasks).unwrap();
+        assert_eq!(table.len(), 2);
+        assert_eq!(table.get(2).unwrap().id(), 2);
+        assert!(matches!(table.get(3), Err(TaskTableError::NotFound)));
+        table.get_mut(1).unwrap().exit().unwrap();
+        assert_eq!(table.get(1).unwrap().state(), TaskState::Exited);
+    }
+}

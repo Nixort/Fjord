@@ -19,10 +19,14 @@
 //! * [`VmRing`] — a single-producer/single-consumer ring index over a shared
 //!   frame, for bulk/streaming transfer outside the synchronous path.
 //!
-//! Real thread blocking/wakeup is owned by `tide` (the scheduler); this slice
-//! models the message transfer and queue state machine that `tide` will drive.
+//! The endpoint's task-aware operations couple this queue to caller-owned
+//! [`crate::task::TaskTable`] storage: a queued caller moves from Running to
+//! Blocked, and a rendezvous wakes the previously blocked peer to Ready. Tide
+//! remains responsible for choosing the next ready task.
 //!
 //! See `docs/ARCHITECTURE.md` §1.
+
+use crate::task::{TaskError, TaskState, TaskTable, TaskTableError};
 
 /// A fixed-size IPC message: a badge, a label, and a few data words.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -170,6 +174,12 @@ pub enum IpcResult {
 pub enum IpcError {
     /// The endpoint's wait queue is full.
     QueueFull,
+    /// The endpoint internal state did not match its queue storage.
+    InconsistentQueue,
+    /// A named task was absent from the caller-provided task table.
+    TaskLookup(TaskTableError),
+    /// A task lifecycle transition required by IPC was not legal.
+    TaskState(TaskError),
 }
 
 /// A synchronous rendezvous endpoint over a caller-owned wait queue (a FIFO
@@ -208,15 +218,23 @@ impl<'q> Endpoint<'q> {
         self.queue.len()
     }
 
-    fn enqueue(&mut self, waiter: Waiter) -> Result<(), IpcError> {
-        let cap = self.queue.len();
-        if cap == 0 || self.len >= cap {
+    fn ensure_enqueue_capacity(&self) -> Result<(), IpcError> {
+        if self.queue.is_empty() || self.len >= self.queue.len() {
             return Err(IpcError::QueueFull);
         }
-        let slot = (self.head + self.len) % cap;
+        Ok(())
+    }
+
+    fn enqueue(&mut self, waiter: Waiter) -> Result<(), IpcError> {
+        self.ensure_enqueue_capacity()?;
+        let slot = (self.head + self.len) % self.queue.len();
         self.queue[slot] = waiter;
         self.len += 1;
         Ok(())
+    }
+
+    fn front(&self) -> Option<Waiter> {
+        (self.len != 0).then(|| self.queue[self.head])
     }
 
     fn dequeue(&mut self) -> Option<Waiter> {
@@ -275,6 +293,103 @@ impl<'q> Endpoint<'q> {
             self.state = EpState::Receivers;
             Ok(IpcResult::Queued)
         }
+    }
+
+    /// Send from the currently running task `sender`.
+    ///
+    /// If no receiver waits, this records the message then blocks `sender` in
+    /// the supplied task table. If a receiver is already blocked, its state is
+    /// checked before the queue is consumed and it is woken to `Ready` after the
+    /// transfer. This preserves endpoint/task atomicity in the single-core
+    /// kernel path: refused calls leave both task state and queue untouched.
+    pub fn send_task(
+        &mut self,
+        tasks: &mut TaskTable<'_>,
+        sender: u64,
+        msg: Message,
+    ) -> Result<IpcResult, IpcError> {
+        require_running(tasks, sender)?;
+        if self.state == EpState::Receivers {
+            let waiting = self.front().ok_or(IpcError::InconsistentQueue)?;
+            require_state(tasks, waiting.thread, TaskState::Blocked)?;
+            let peer = self.dequeue().ok_or(IpcError::InconsistentQueue)?;
+            tasks
+                .get_mut(peer.thread)
+                .map_err(IpcError::TaskLookup)?
+                .unblock()
+                .map_err(IpcError::TaskState)?;
+            Ok(IpcResult::Delivered {
+                peer: peer.thread,
+                msg,
+            })
+        } else {
+            self.ensure_enqueue_capacity()?;
+            tasks
+                .get_mut(sender)
+                .map_err(IpcError::TaskLookup)?
+                .block()
+                .map_err(IpcError::TaskState)?;
+            self.enqueue(Waiter {
+                thread: sender,
+                msg,
+            })?;
+            self.state = EpState::Senders;
+            Ok(IpcResult::Queued)
+        }
+    }
+
+    /// Receive on behalf of the currently running task `receiver`.
+    ///
+    /// The symmetric task-aware operation: a receiver with no waiting sender is
+    /// blocked, while a queued sender is made ready after its message is
+    /// consumed. Explicit reply objects and capability transfer intentionally
+    /// remain a later IPC slice.
+    pub fn recv_task(
+        &mut self,
+        tasks: &mut TaskTable<'_>,
+        receiver: u64,
+    ) -> Result<IpcResult, IpcError> {
+        require_running(tasks, receiver)?;
+        if self.state == EpState::Senders {
+            let waiting = self.front().ok_or(IpcError::InconsistentQueue)?;
+            require_state(tasks, waiting.thread, TaskState::Blocked)?;
+            let peer = self.dequeue().ok_or(IpcError::InconsistentQueue)?;
+            tasks
+                .get_mut(peer.thread)
+                .map_err(IpcError::TaskLookup)?
+                .unblock()
+                .map_err(IpcError::TaskState)?;
+            Ok(IpcResult::Delivered {
+                peer: peer.thread,
+                msg: peer.msg,
+            })
+        } else {
+            self.ensure_enqueue_capacity()?;
+            tasks
+                .get_mut(receiver)
+                .map_err(IpcError::TaskLookup)?
+                .block()
+                .map_err(IpcError::TaskState)?;
+            self.enqueue(Waiter {
+                thread: receiver,
+                msg: Message::empty(),
+            })?;
+            self.state = EpState::Receivers;
+            Ok(IpcResult::Queued)
+        }
+    }
+}
+
+fn require_running(tasks: &TaskTable<'_>, id: u64) -> Result<(), IpcError> {
+    require_state(tasks, id, TaskState::Running)
+}
+
+fn require_state(tasks: &TaskTable<'_>, id: u64, expected: TaskState) -> Result<(), IpcError> {
+    let task = tasks.get(id).map_err(IpcError::TaskLookup)?;
+    if task.state() == expected {
+        Ok(())
+    } else {
+        Err(IpcError::TaskState(TaskError::InvalidTransition))
     }
 }
 
@@ -444,4 +559,102 @@ pub fn selftest() -> Result<(), IpcError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod task_endpoint_tests {
+    extern crate std;
+
+    use super::*;
+    use crate::cap::{CapType, Capability, Rights};
+    use crate::task::TaskControlBlock;
+    use hull::user::UserFrame;
+
+    fn task(id: u64) -> TaskControlBlock {
+        let cspace = Capability::new(CapType::CNode, 0x40_0000 + id * 0x1000, 5, Rights::ALL);
+        TaskControlBlock::new(
+            id,
+            cspace,
+            0x80_0000 + id * 0x1000,
+            UserFrame::new(0x4000, 0x8000),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn receiver_first_blocks_then_is_woken_by_sender() {
+        let mut task_storage = [task(1), task(2)];
+        let mut tasks = TaskTable::new(&mut task_storage).unwrap();
+        tasks.get_mut(2).unwrap().start().unwrap();
+        let mut waiters = [Waiter::default(); 2];
+        let mut endpoint = Endpoint::new(&mut waiters);
+        let msg = Message::new(0x44, 7, &[1, 2]);
+
+        assert_eq!(endpoint.recv_task(&mut tasks, 2), Ok(IpcResult::Queued));
+        assert_eq!(tasks.get(2).unwrap().state(), TaskState::Blocked);
+        assert_eq!(endpoint.waiting(), 1);
+
+        tasks.get_mut(1).unwrap().start().unwrap();
+        assert_eq!(
+            endpoint.send_task(&mut tasks, 1, msg),
+            Ok(IpcResult::Delivered { peer: 2, msg })
+        );
+        assert_eq!(tasks.get(1).unwrap().state(), TaskState::Running);
+        assert_eq!(tasks.get(2).unwrap().state(), TaskState::Ready);
+        assert_eq!(endpoint.waiting(), 0);
+    }
+
+    #[test]
+    fn sender_first_blocks_then_is_woken_by_receiver() {
+        let mut task_storage = [task(1), task(2)];
+        let mut tasks = TaskTable::new(&mut task_storage).unwrap();
+        tasks.get_mut(1).unwrap().start().unwrap();
+        let mut waiters = [Waiter::default(); 2];
+        let mut endpoint = Endpoint::new(&mut waiters);
+        let msg = Message::new(0x55, 8, &[3, 4]);
+
+        assert_eq!(
+            endpoint.send_task(&mut tasks, 1, msg),
+            Ok(IpcResult::Queued)
+        );
+        assert_eq!(tasks.get(1).unwrap().state(), TaskState::Blocked);
+        tasks.get_mut(2).unwrap().start().unwrap();
+        assert_eq!(
+            endpoint.recv_task(&mut tasks, 2),
+            Ok(IpcResult::Delivered { peer: 1, msg })
+        );
+        assert_eq!(tasks.get(1).unwrap().state(), TaskState::Ready);
+        assert_eq!(tasks.get(2).unwrap().state(), TaskState::Running);
+        assert_eq!(endpoint.waiting(), 0);
+    }
+
+    #[test]
+    fn non_running_or_full_queue_rejection_is_non_destructive() {
+        let mut task_storage = [task(1), task(2)];
+        let mut tasks = TaskTable::new(&mut task_storage).unwrap();
+        let mut waiters = [Waiter::default(); 1];
+        let mut endpoint = Endpoint::new(&mut waiters);
+        let msg = Message::new(0, 1, &[]);
+
+        assert_eq!(
+            endpoint.send_task(&mut tasks, 1, msg),
+            Err(IpcError::TaskState(TaskError::InvalidTransition))
+        );
+        assert_eq!(endpoint.waiting(), 0);
+        assert_eq!(tasks.get(1).unwrap().state(), TaskState::Ready);
+
+        tasks.get_mut(1).unwrap().start().unwrap();
+        assert_eq!(
+            endpoint.send_task(&mut tasks, 1, msg),
+            Ok(IpcResult::Queued)
+        );
+        assert_eq!(tasks.get(1).unwrap().state(), TaskState::Blocked);
+        tasks.get_mut(2).unwrap().start().unwrap();
+        assert_eq!(
+            endpoint.send_task(&mut tasks, 2, msg),
+            Err(IpcError::QueueFull)
+        );
+        assert_eq!(tasks.get(2).unwrap().state(), TaskState::Running);
+        assert_eq!(endpoint.waiting(), 1);
+    }
 }
