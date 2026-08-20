@@ -170,7 +170,7 @@ mod tests {
         for p in &pages {
             body.extend_from_slice(p);
         }
-        let body_off = HEADER_LEN as u64;
+        let body_off = (HEADER_LEN as u64 + u64::from(PAGE) - 1) & !u64::from(PAGE - 1);
         let tail = body_off + body.len() as u64;
         let header = Header {
             format_version: FORMAT_VERSION,
@@ -197,6 +197,7 @@ mod tests {
         };
         let mut image = Vec::new();
         image.extend_from_slice(&header.encode());
+        image.resize(body_off as usize, 0);
         image.extend_from_slice(&body);
         (image, tree, pages)
     }
@@ -210,7 +211,7 @@ mod tests {
     #[test]
     fn open_and_verify_rejects_corrupt_body() {
         let (mut image, _, _) = build_image(9);
-        let body_start = HEADER_LEN;
+        let body_start = (HEADER_LEN + PAGE as usize - 1) & !(PAGE as usize - 1);
         image[body_start] ^= 0x80;
         assert!(matches!(
             open_and_verify(&image),
