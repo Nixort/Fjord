@@ -53,6 +53,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86
 
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "${{ env.NIGHTLY }}" --profile minimal \
+            --component rust-src \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview \
+            --target x86_64-unknown-none \
+            --target aarch64-unknown-none-softfloat
+
       - name: Cache cargo state
         uses: actions/cache@v6
         with:
@@ -68,21 +78,29 @@ jobs:
       - name: Time-boxed x86_64 QEMU smoke
         run: |
           set +e
-          timeout --foreground 45s cargo +${{ env.NIGHTLY }} shipwright -- qemu
+          set -o pipefail
+          mkdir -p target
+          timeout --kill-after=5s 45s cargo +${{ env.NIGHTLY }} shipwright -- qemu > target/qemu-x86_64-serial.log 2>&1
           status=$?
+          cat target/qemu-x86_64-serial.log
           set -e
-          if [ "${status}" -eq 124 ]; then
-            echo 'QEMU reached the smoke-test time window; treating this as boot-stability success.'
+          if [ "${status}" -eq 124 ] && grep -Fq 'keel: early console up; entering idle (Phase 2 boot pending).' target/qemu-x86_64-serial.log; then
+            echo 'QEMU reached the verified boot sentinel within the smoke-test window.'
             exit 0
+          fi
+          if [ "${status}" -eq 124 ]; then
+            echo 'QEMU timed out before the verified boot sentinel.' >&2
           fi
           exit "${status}"
 
-      - name: Upload QEMU guest log
+      - name: Upload QEMU guest logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: qemu-x86_64-log
-          path: target/qemu-fjord.log
+          path: |
+            target/qemu-fjord.log
+            target/qemu-x86_64-serial.log
           if-no-files-found: ignore
 
   aarch64:
@@ -97,6 +115,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-arm
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "${{ env.NIGHTLY }}" --profile minimal \
+            --component rust-src \
+            --component rustfmt \
+            --component clippy \
+            --component llvm-tools-preview \
+            --target x86_64-unknown-none \
+            --target aarch64-unknown-none-softfloat
 
       - name: Cache cargo state
         uses: actions/cache@v6
@@ -113,11 +141,25 @@ jobs:
       - name: Time-boxed aarch64 QEMU smoke
         run: |
           set +e
-          timeout --foreground 45s scripts/qemu-aarch64.sh -no-reboot
+          set -o pipefail
+          mkdir -p target
+          timeout --kill-after=5s 45s scripts/qemu-aarch64.sh -no-reboot > target/qemu-aarch64-serial.log 2>&1
           status=$?
+          cat target/qemu-aarch64-serial.log
           set -e
-          if [ "${status}" -eq 124 ]; then
-            echo 'QEMU reached the smoke-test time window; treating this as boot-stability success.'
+          if [ "${status}" -eq 124 ] && grep -Fq 'keel: early console up; entering idle (Phase 2 boot pending).' target/qemu-aarch64-serial.log; then
+            echo 'QEMU reached the verified boot sentinel within the smoke-test window.'
             exit 0
           fi
+          if [ "${status}" -eq 124 ]; then
+            echo 'QEMU timed out before the verified boot sentinel.' >&2
+          fi
           exit "${status}"
+
+      - name: Upload aarch64 QEMU serial log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qemu-aarch64-log
+          path: target/qemu-aarch64-serial.log
+          if-no-files-found: ignore

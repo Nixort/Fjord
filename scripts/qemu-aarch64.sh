@@ -37,4 +37,5 @@ exec qemu-system-aarch64 \
   -M virt -cpu cortex-a72 \
   -kernel "${IMG}" \
   -serial stdio -display none \
+  -net none \
   "$@"
