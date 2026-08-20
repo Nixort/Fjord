@@ -13,7 +13,9 @@
 
 use cask::format::Cask;
 use cask::{verify, CaskError};
-use logbook::{self, Checkpoint, InclusionProof, LogbookError, Revocation};
+use logbook::{
+    self, Checkpoint, CheckpointAuthenticator, InclusionProof, LogbookError, Revocation,
+};
 
 /// Preflight output consumed by the supervisor before it asks Keel to map/start.
 pub struct LaunchPlan<'a> {
@@ -47,11 +49,16 @@ impl From<LogbookError> for LaunchError {
 }
 
 /// Verify and plan the launch of a Cask.
-pub fn launch_cask<'a>(
+///
+/// `checkpoint_anchor` is a policy-owned verifier bound to the configured
+/// Logbook trust anchor. Launch is deliberately impossible without it: a valid
+/// Merkle inclusion proof under an attacker-supplied root is not transparency.
+pub fn launch_cask<'a, A: CheckpointAuthenticator + ?Sized>(
     image: &'a [u8],
     checkpoint: &Checkpoint,
     proof: &InclusionProof,
     revocations: &[Revocation],
+    checkpoint_anchor: &A,
 ) -> Result<LaunchPlan<'a>, LaunchError> {
     let cask = verify::open_and_verify(image)?;
     let signature = cask.signature_bytes();
@@ -59,7 +66,7 @@ pub fn launch_cask<'a>(
         return Err(LaunchError::MissingSignature);
     }
     let leaf = logbook::signature_leaf(signature);
-    logbook::verify_inclusion(&leaf, checkpoint, proof, revocations)?;
+    logbook::verify_inclusion(&leaf, checkpoint, proof, revocations, checkpoint_anchor)?;
     let page_count = cask.page_count();
     Ok(LaunchPlan { cask, page_count })
 }
