@@ -12,6 +12,7 @@
 //! safely move a task between Ready, Running, Blocked, and Exited states.
 
 use crate::cap::{CapType, Capability};
+use crate::tide::SchedContext;
 use hull::user::UserFrame;
 
 /// The observable lifecycle state of a task.
@@ -45,6 +46,10 @@ pub enum TaskError {
     InvalidTransition,
     /// The task has already reached its terminal exited state.
     Exited,
+    /// The scheduling context has no valid positive budget/period configuration.
+    InvalidSchedContext,
+    /// The task has no scheduling context to unbind or mutate.
+    MissingSchedContext,
 }
 
 /// A heap-free kernel task object.
@@ -60,6 +65,7 @@ pub struct TaskControlBlock {
     cspace_root: Capability,
     vspace_root: u64,
     user_frame: UserFrame,
+    sched_context: Option<SchedContext>,
     state: TaskState,
 }
 
@@ -86,6 +92,7 @@ impl TaskControlBlock {
             cspace_root,
             vspace_root,
             user_frame,
+            sched_context: None,
             state: TaskState::Ready,
         })
     }
@@ -126,6 +133,61 @@ impl TaskControlBlock {
     /// kernel. A later scheduler integration enforces that ownership boundary.
     pub fn user_frame_mut(&mut self) -> &mut UserFrame {
         &mut self.user_frame
+    }
+
+    /// Bind a configured scheduling context to this task.
+    ///
+    /// The context must carry a positive budget and period with `budget <= period`.
+    /// Binding replaces a previously bound context only before the task exits;
+    /// the scheduler will later own the context's mutable budget accounting.
+    pub fn bind_sched_context(&mut self, sc: SchedContext) -> Result<(), TaskError> {
+        if self.state == TaskState::Exited {
+            return Err(TaskError::Exited);
+        }
+        if sc.budget() == 0 || sc.period() == 0 || sc.budget() > sc.period() {
+            return Err(TaskError::InvalidSchedContext);
+        }
+        self.sched_context = Some(sc);
+        Ok(())
+    }
+
+    /// Remove and return the task's scheduling context.
+    pub fn unbind_sched_context(&mut self) -> Result<SchedContext, TaskError> {
+        if self.state == TaskState::Exited {
+            return Err(TaskError::Exited);
+        }
+        self.sched_context
+            .take()
+            .ok_or(TaskError::MissingSchedContext)
+    }
+
+    /// The scheduling context currently bound to this task, if any.
+    #[must_use]
+    pub const fn sched_context(&self) -> Option<SchedContext> {
+        self.sched_context
+    }
+
+    /// Mutable access to the bound scheduling context for Tide accounting.
+    pub fn sched_context_mut(&mut self) -> Result<&mut SchedContext, TaskError> {
+        if self.state == TaskState::Exited {
+            return Err(TaskError::Exited);
+        }
+        self.sched_context
+            .as_mut()
+            .ok_or(TaskError::MissingSchedContext)
+    }
+
+    /// Whether this task is eligible for Tide dispatch.
+    ///
+    /// A task must be ready, have a bound configured scheduling context and still
+    /// carry budget. This keeps task eligibility local and prevents later Tide
+    /// queues from dispatching authority-less or budget-less tasks.
+    #[must_use]
+    pub fn is_schedulable(&self) -> bool {
+        self.state == TaskState::Ready
+            && self
+                .sched_context
+                .is_some_and(|sc| sc.budget() > 0 && sc.period() > 0 && !sc.depleted())
     }
 
     /// Mark a ready task as currently running.
@@ -196,6 +258,13 @@ pub fn selftest() -> Result<(), TaskError> {
         return Err(TaskError::InvalidTransition);
     }
 
+    if task.is_schedulable() {
+        return Err(TaskError::MissingSchedContext);
+    }
+    task.bind_sched_context(SchedContext::new(2, 4))?;
+    if !task.is_schedulable() {
+        return Err(TaskError::MissingSchedContext);
+    }
     task.start()?;
     task.user_frame_mut().set_ret(0xfeed);
     if task.user_frame().syscall_nr() != 0xfeed {
@@ -208,6 +277,15 @@ pub fn selftest() -> Result<(), TaskError> {
     task.resume_fault()?;
     task.start()?;
     task.yield_now()?;
+    if !task.is_schedulable() {
+        return Err(TaskError::MissingSchedContext);
+    }
+    if task.unbind_sched_context()? != SchedContext::new(2, 4) || task.is_schedulable() {
+        return Err(TaskError::MissingSchedContext);
+    }
+    if task.bind_sched_context(SchedContext::new(0, 4)) != Err(TaskError::InvalidSchedContext) {
+        return Err(TaskError::InvalidSchedContext);
+    }
     task.exit()?;
     if task.start() != Err(TaskError::Exited) || task.exit() != Err(TaskError::Exited) {
         return Err(TaskError::Exited);
@@ -255,6 +333,27 @@ mod tests {
         t.unblock().unwrap();
         t.exit().unwrap();
         assert_eq!(t.unblock(), Err(TaskError::Exited));
+    }
+
+    #[test]
+    fn scheduling_context_binding_controls_eligibility() {
+        let mut t = task();
+        assert!(!t.is_schedulable());
+        assert_eq!(
+            t.bind_sched_context(SchedContext::new(5, 4)),
+            Err(TaskError::InvalidSchedContext)
+        );
+        assert_eq!(
+            t.unbind_sched_context(),
+            Err(TaskError::MissingSchedContext)
+        );
+        t.bind_sched_context(SchedContext::new(2, 4)).unwrap();
+        assert!(t.is_schedulable());
+        t.start().unwrap();
+        assert!(!t.is_schedulable());
+        t.yield_now().unwrap();
+        assert_eq!(t.unbind_sched_context().unwrap(), SchedContext::new(2, 4));
+        assert!(!t.is_schedulable());
     }
 
     #[test]
