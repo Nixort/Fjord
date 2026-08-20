@@ -84,12 +84,14 @@ jobs:
           status=$?
           cat target/qemu-x86_64-serial.log
           set -e
-          if [ "${status}" -eq 124 ] && grep -Fq 'keel: early console up; entering idle (Phase 2 boot pending).' target/qemu-x86_64-serial.log; then
-            echo 'QEMU reached the verified boot sentinel within the smoke-test window.'
+          if [ "${status}" -eq 124 ] \
+            && grep -Fq 'keel: PHASE2: IPC_ROUNDTRIP PASS (payload 0xf70dca11)' target/qemu-x86_64-serial.log \
+            && grep -Fq 'keel: early console up; entering idle (Phase 2 boot pending).' target/qemu-x86_64-serial.log; then
+            echo 'QEMU reached the verified Phase 2 IPC and boot sentinels within the smoke-test window.'
             exit 0
           fi
           if [ "${status}" -eq 124 ]; then
-            echo 'QEMU timed out before the verified boot sentinel.' >&2
+            echo 'QEMU timed out before the verified Phase 2 IPC and boot sentinels.' >&2
           fi
           exit "${status}"
 
@@ -147,12 +149,14 @@ jobs:
           status=$?
           cat target/qemu-aarch64-serial.log
           set -e
-          if [ "${status}" -eq 124 ] && grep -Fq 'keel: early console up; entering idle (Phase 2 boot pending).' target/qemu-aarch64-serial.log; then
-            echo 'QEMU reached the verified boot sentinel within the smoke-test window.'
+          if [ "${status}" -eq 124 ] \
+            && grep -Fq 'keel: PHASE2: IPC_ROUNDTRIP PASS (payload 0xf70dca11)' target/qemu-aarch64-serial.log \
+            && grep -Fq 'keel: early console up; entering idle (Phase 2 boot pending).' target/qemu-aarch64-serial.log; then
+            echo 'QEMU reached the verified Phase 2 IPC and boot sentinels within the smoke-test window.'
             exit 0
           fi
           if [ "${status}" -eq 124 ]; then
-            echo 'QEMU timed out before the verified boot sentinel.' >&2
+            echo 'QEMU timed out before the verified Phase 2 IPC and boot sentinels.' >&2
           fi
           exit "${status}"
 

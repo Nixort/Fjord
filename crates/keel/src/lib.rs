@@ -248,26 +248,18 @@ pub fn kmain(boot: &BootInfo) -> ! {
         Err(e) => hull::kprintln!("keel: WARNING irq-handler self-test failed: {e:?}"),
     }
 
-    // First userspace task: drop to the unprivileged level into a tiny program
-    // (x86_64: ring 3 via `iretq`, trap back through `int 0x80`; aarch64: EL0
-    // via `eret`, trap back through `svc #0`), prove the privilege boundary by
-    // recovering the magic it traps with, and unwind back into the kernel. This
-    // is the live user/kernel transition the Phase 2 exit criterion is built
-    // on; a scheduled task exchanging IPC over an endpoint lands in a follow-up
-    // slice.
-    #[cfg(target_arch = "x86_64")]
-    match userspace::selftest(&mut frames) {
-        Ok(v) => {
-            hull::kprintln!("keel: userspace self-test -> ring3 entered, int 0x80 echo {v:#x} OK")
-        }
-        Err(e) => hull::kprintln!("keel: WARNING userspace self-test failed: {e:?}"),
-    }
-    #[cfg(target_arch = "aarch64")]
-    match userspace::selftest(&mut frames) {
-        Ok(v) => hull::kprintln!("keel: userspace self-test -> EL0 entered, svc #0 echo {v:#x} OK"),
-        Err(e) => hull::kprintln!("keel: WARNING userspace self-test failed: {e:?}"),
+    // Phase 2 exit proof: two independent unprivileged task VSpaces run under
+    // Tide priority selection and rendezvous through a task-aware endpoint. The
+    // receiver blocks, the sender wakes it with a word, and its saved user frame
+    // resumes to exit with the transferred payload.
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    match userspace::ipc_roundtrip(&mut frames) {
+        Ok(v) => hull::kprintln!("keel: PHASE2: IPC_ROUNDTRIP PASS (payload {v:#x})"),
+        Err(e) => hull::kprintln!("keel: WARNING PHASE2 IPC round-trip failed: {e:?}"),
     }
 
+    // Retained as the stable, verified QEMU boot sentinel. The preceding Phase
+    // 2 marker is the stronger integration criterion for this release slice.
     hull::kprintln!("keel: early console up; entering idle (Phase 2 boot pending).");
 
     // Subsystems are self-tested in dependency order; the remaining Helm
