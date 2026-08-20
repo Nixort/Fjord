@@ -31,24 +31,22 @@ Keel is a capability microkernel (seL4 lineage). It implements only:
 
 Everything else (drivers, FS, network, paging policy) lives in userspace.
 
-**Implementation status (v0.0.2).** All six mechanisms above are present as
-heap-free models over caller-owned storage, each with a boot-time self-test that
-passes on x86_64 and aarch64: `cap` (CSpace) and `cdt` (capability
-derivation/revocation tree), `vspace` (map/translate/unmap with W^X, bound to the
-Hull page-table mapper), `untyped` (retype), `ipc` (synchronous endpoints, async
-notifications, `vmring`) and `tide` (MCS priority scheduler with budget
-replenishment). As of v0.0.2 the Phase 2 kernel *mechanisms* are green and their
-*integration* into the live boot path has begun: `vspace` drives real Hull page
-tables, the scheduler performs cooperative *and* preemptive timer-driven context
-switches, hardware interrupts are delivered as capability-backed notifications
-(`keel::irqhandler` over the `hull::irq_hook` seam, the seL4 IRQHandler model),
-and at boot the kernel now stands up its root capability space by retyping the
-initial task's first objects (four pages + a TCB) straight out of a real untyped
-region reserved from physical RAM (`cte::bootstrap_root`). Twelve boot-time
-self-tests pass on both targets. The `Cask` MVP — parse + BLAKE3 Merkle verify
-on the loader path — is now in tree (`crates/cask`; see §5). Phase 2 is *not*
-finished: launching the first real TCB-backed userspace task scheduled by Tide
-(the phase exit criterion) remains, tracked in `docs/ROADMAP.md`.
+**Implementation status (v0.0.2).** **Phase 2 is complete.** All six
+mechanisms are heap-free and use caller-owned storage: `cap` (CSpace), `cdt`
+(derivation/revocation), `vspace` (W^X map/translate/unmap), `untyped`, `ipc`
+(synchronous endpoints, notifications and `vmring`), and `tide` (budgeted
+priority scheduling). Their live boot integration is proven on x86_64 and
+aarch64. Keel retypes bootstrap objects from real untyped RAM, clones the active
+kernel root for each task VSpace, performs verified CR3/TTBR0 activate/restore
+handoffs, and maintains TCB lifecycle plus scheduling-context ownership.
+
+The Phase 2 exit proof creates two separate unprivileged VSpaces. Tide dispatches
+the receiver, then the sender, then the awakened receiver; task-aware endpoint
+IPC performs the receiver `Running → Blocked → Ready` transition; and the saved
+user frame resumes with the transmitted word. QEMU smoke requires
+`PHASE2: IPC_ROUNDTRIP PASS` on both targets. Tide uses bounded FIFO queues per
+priority and a 256-bit ready bitmap, so highest-priority selection does not scan
+the full admitted-task table. The Cask integrity MVP is also present (`crates/cask`; see §5).
 
 ## 2. Hull — hardware abstraction layer
 
@@ -65,13 +63,14 @@ This is the root of the end-to-end chain of trust.
 
 ## 4. Helm — supervisor + Cask verifier
 
-Helm is the first userspace task and holds the root CSpace. It:
-
-- starts and supervises the core services;
-- **verifies every `Cask`** before execution: signature (authenticity),
-  BLAKE3 Merkle root (integrity), license budget (authorization), and a
-  `Logbook` inclusion proof (transparency);
-- computes the effective capability set as `manifest ∩ license ∩ delegated`.
+Helm is the policy-facing userspace supervisor and will hold the root CSpace.
+Its target contract is to start core services, compute
+`manifest ∩ license ∩ delegated`, and gate every Cask on authenticity,
+integrity, authorization and transparency. Current code exposes a fail-closed
+preflight: Cask integrity is verified, a detached signature block is required,
+and a Logbook inclusion proof must be anchored by a caller-provided checkpoint
+trust verifier. Full Cask signatures, license budgets, and the root-task service
+manager remain Phase 3 work.
 
 ## 5. Cask — the executable format
 
@@ -88,15 +87,17 @@ A `.cask` is a tamper-evident container (see `crates/cask`):
   proof, enabling detection and revocation.
 
 **Implementation status (v0.0.2).** The integrity half is in tree and heap-free:
-a from-scratch BLAKE3 (`cask::blake3`, pinned to the upstream known-answer
-vectors), an fs-verity-style Merkle tree whose root is sealed in the header
-(`cask::merkle`), a zero-copy, strictly bounds-checked container parser
-(`cask::format`), and the verification pipeline (`cask::verify`) exposing both
-the eager whole-image check and the loader's allocation-free lazy
-`verify_page` on a fault. Authenticity (hybrid signatures), anti-rollback, and
-`Logbook` transparency are deliberately *absent* (not stubbed to succeed) until
-`anchor`/`harbormaster`/`logbook` land in Phase 3, where Helm composes them
-ahead of integrity.
+a from-scratch BLAKE3 (`cask::blake3`, pinned to upstream known-answer vectors),
+an fs-verity-style Merkle tree whose root is sealed in the header
+(`cask::merkle`), and a zero-copy, strictly bounds-checked parser
+(`cask::format`). The eager verifier streams the Merkle root using `O(log
+page_count)` hashes instead of materialising every level; the loader's lazy
+`verify_page` remains allocation-free on fault. Authenticity (hybrid
+signatures), anti-rollback, and license policy remain Phase 3 work. Logbook
+inclusion now rejects unauthenticated checkpoints through a mandatory,
+domain-separated trust-anchor interface, but the real Anchor/HSM-backed
+Ed25519/ML-DSA verifier and append-only log service are intentionally still
+unimplemented.
 
 ## 6. Brine — disk encryption
 

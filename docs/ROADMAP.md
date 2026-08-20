@@ -48,11 +48,12 @@ crate compiles as a stub for both targets.
 **Exit criteria.** Two userspace tasks exchange a message over an endpoint and
 are scheduled by budget; a capability cannot be forged or escalated.
 
-**Status.** The six core mechanisms now exist as heap-free, caller-owned-storage
-models, each exercised by a boot-time self-test (green on x86_64 + aarch64). What
-remains is *integration*: fusing the models into live kernel objects retyped from
-untyped memory, wiring VSpace to the Hull page-table mapper, and a real context
-switch driven by the timer IRQ.
+**Status.** **Completed.** The six core mechanisms are heap-free and use
+caller-owned storage. Their live integration is now proven on x86_64 and aarch64:
+Keel creates task control blocks, binds scheduling contexts, clones and activates
+task VSpace roots, dispatches a two-task userspace IPC rendezvous through Tide,
+and restores the kernel root after every user transition. QEMU requires the
+`PHASE2: IPC_ROUNDTRIP PASS` sentinel before accepting the smoke run.
 
 - [x] CSpace: capability tables, derivation, revocation tree (`cap` + `cdt`, self-tested)
 - [x] VSpace: page-table abstraction, map/unmap, W^X invariants (`vspace`, self-tested)
@@ -61,15 +62,16 @@ switch driven by the timer IRQ.
 - [x] IPC: async notifications + `vmring` shared-memory rings (`ipc`, self-tested)
 - [x] Tide: MCS scheduling contexts (budget/period), priorities (`tide`, self-tested)
 - [x] CTE integration: the boot path stands up the kernel root CSpace and retypes the initial task's first objects (4 pages + a TCB) from a real untyped region reserved from RAM (`cte::bootstrap_root`, live in `kmain`)
-- [x] VSpace ↔ Hull: `HwVSpace` fuses the bookkeeping `VSpace` with `hull`’s `Mapper` so `map`/`unmap` write real 4 KiB hardware leaves (W^X enforced); exercised on an inactive scratch address space — live-regime install (TTBR0/CR3 handoff) still pending ✅
+- [x] VSpace ↔ Hull: `HwVSpace` fuses the bookkeeping `VSpace` with `hull`’s `Mapper` so `map`/`unmap` write real 4 KiB hardware leaves (W^X enforced); task roots clone the active kernel root and execute verified CR3/TTBR0 activate/restore handoff on both architectures ✅
 - [x] Tide context switch: `hull::context` saves/restores callee-saved CPU state and resumes a fresh context on its own stack, proven by a cooperative round-trip self-test (`tide::ctx_selftest`, both arches) ✅
 - [x] Tide preemptive switch: the platform timer ISR alone interleaves two non-cooperative worker contexts via a Hull tick hook (`hull::sched_hook`) that Keel registers, proven by `tide::preempt_selftest` (both arches) ✅
 - [x] IRQ delivery as capabilities: `hull::irq_hook` + `keel::irqhandler` — platform timer IRQ delivered to a `Notification` as a badge via an inversion-of-control hook, proven by `irqhandler::selftest` (both arches) ✅
-- [ ] First userspace task launch from Keel
-  - [x] x86_64: live ring-3 round-trip — drop to ring 3 (iretq) into a mapped USER page, trap back via `int 0x80` (DPL-3 gate), recover the argument; proven by `userspace::selftest` 🟢
-  - [x] aarch64: EL0 entry — drop to EL0 (`eret`) into a mapped EL0 page, trap back via `svc #0` (lower-EL synchronous vector), recover the argument; proven by `userspace::selftest` 🟢
-  - [ ] real TCB-backed task scheduled by Tide, syscall dispatched over an endpoint 🔴
-- [x] `Cask` MVP: parse + BLAKE3 Merkle verify (loader path) — in-tree heap-free BLAKE3 (`cask::blake3`, pinned to upstream KATs), an fs-verity-style Merkle tree with allocation-free lazy page proofs (`cask::merkle`), a zero-copy bounds-checked container parser (`cask::format`), and the parse+integrity pipeline with a heap-free `selftest()` (`cask::verify`). Signature/rollback/Logbook gates follow in Phase 3. ✅
+- [x] First TCB-backed userspace task launch from Keel
+  - [x] x86_64: ring-3 entry (`iretq`) and resumable `int 0x80` user frames 🟢
+  - [x] aarch64: EL0 entry (`eret`) and resumable `svc #0` user frames 🟢
+  - [x] Two Tide-scheduled tasks own separate cloned VSpace roots, rendezvous over a task-aware endpoint, and prove receiver block/wake/resume with `PHASE2: IPC_ROUNDTRIP PASS` on both QEMU targets ✅
+- [x] Tide ready queues: per-priority bounded FIFO queues plus a 256-bit ready bitmap provide deterministic highest-priority dispatch without a linear ready-set scan ✅
+- [x] `Cask` MVP: parse + BLAKE3 Merkle verify — eager verification streams the tree with `O(log page_count)` state; the loader retains allocation-free lazy page proofs; the parser remains zero-copy and bounds-checked. Signature/rollback/Logbook gates follow in Phase 3. ✅
 
 ## Phase 3 — Trust, identity & encryption  (⬜)
 
@@ -84,7 +86,7 @@ or over-budget is refused; the disk is unreadable without successful MFA.
 - [ ] `Cask`: full seal/verify (Ed25519 + ML-DSA hybrid signatures)
 - [ ] `Cask`: license-as-capability-budget; Helm enforces manifest ∩ license
 - [ ] `Cask`: anti-rollback via monotonic counter (TPM NV / RPMB)
-- [ ] `Logbook`: append-only log, inclusion proofs, revocation feed
+- [ ] `Logbook`: append-only log, inclusion proofs, revocation feed — canonical domain-separated checkpoints and a mandatory fail-closed trust-anchor verifier are in tree; an Anchor/HSM-backed Ed25519/ML-DSA verifier and the append-only service remain Phase 3 work
 - [ ] `Brine`: envelope keys (DEK/VK/KEK), AEAD data path
 - [ ] `Brine`: crypto-erase, anti-rollback of ciphertext blocks
 - [ ] `Harbormaster`: FIDO2/passkey + Argon2id + device attestation
