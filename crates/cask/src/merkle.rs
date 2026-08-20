@@ -65,6 +65,88 @@ pub fn parent_hash(left: &Hash, right: &Hash) -> Hash {
     hasher.finalize()
 }
 
+/// Allocation-free, left-to-right Merkle root builder.
+///
+/// The accumulator retains at most one complete power-of-two subtree at each
+/// height, therefore using at most 64 hashes for the `u64` Cask page-count
+/// domain. A completed tree is folded from low to high height at the end: this
+/// is essential because Cask promotes an odd final node unchanged at *every*
+/// level instead of duplicating it. It produces exactly the root from
+/// [`MerkleTree::build`] while avoiding its `O(page_count)` materialisation.
+#[derive(Clone, Copy, Debug)]
+pub struct StreamingRoot {
+    frontier: [Option<Hash>; 64],
+    leaves: u64,
+}
+
+impl StreamingRoot {
+    /// Start an empty Merkle accumulator.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            frontier: [None; 64],
+            leaves: 0,
+        }
+    }
+
+    /// Number of pages appended so far.
+    #[must_use]
+    pub const fn leaf_count(&self) -> u64 {
+        self.leaves
+    }
+
+    /// Append one body page to the running tree.
+    ///
+    /// The image parser bounds `page_count` by an in-memory slice length, so the
+    /// `u64` counter cannot wrap in a valid Cask. The `debug_assert` still makes
+    /// that format invariant explicit for future alternate sources.
+    pub fn push_page(&mut self, page: &[u8]) {
+        debug_assert!(self.leaves != u64::MAX);
+        let mut node = leaf_hash(page);
+        let mut height = 0usize;
+        let mut occupied = self.leaves;
+
+        // Binary carry: adjacent completed subtrees of equal height become a
+        // parent, preserving the source order as left then right.
+        while occupied & 1 != 0 {
+            let left = self.frontier[height]
+                .take()
+                .expect("frontier bit and subtree occupancy stay coupled");
+            node = parent_hash(&left, &node);
+            occupied >>= 1;
+            height += 1;
+        }
+        self.frontier[height] = Some(node);
+        self.leaves += 1;
+    }
+
+    /// Finalise the root, or return `None` for an empty page stream.
+    #[must_use]
+    pub fn finish(self) -> Option<Hash> {
+        if self.leaves == 0 {
+            return None;
+        }
+
+        // For non-power-of-two counts the rightmost fragment must be folded
+        // first. Example: seven leaves retain [4, 2, 1] subtrees and become
+        // parent(4, parent(2, 1)), matching level-by-level odd promotion.
+        let mut root = None;
+        for left in self.frontier.into_iter().flatten() {
+            root = Some(match root {
+                Some(right) => parent_hash(&left, &right),
+                None => left,
+            });
+        }
+        root
+    }
+}
+
+impl Default for StreamingRoot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Which side a proof step's sibling sits on, relative to the running hash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
@@ -343,5 +425,35 @@ mod tests {
         let p = pages(4, 64);
         let tree = MerkleTree::build(&refs(&p)).unwrap();
         assert!(tree.proof(4).is_none());
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    extern crate std;
+
+    use super::*;
+    use std::vec::Vec;
+
+    #[test]
+    fn streaming_root_matches_materialized_tree_for_varied_shapes() {
+        for count in [1usize, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 63, 64, 65] {
+            let pages: Vec<Vec<u8>> = (0..count)
+                .map(|i| (0..97).map(|j| (i.wrapping_mul(13) + j) as u8).collect())
+                .collect();
+            let refs: Vec<&[u8]> = pages.iter().map(Vec::as_slice).collect();
+            let expected = MerkleTree::build(&refs).unwrap().root();
+            let mut streamed = StreamingRoot::new();
+            for page in &pages {
+                streamed.push_page(page);
+            }
+            assert_eq!(streamed.leaf_count(), count as u64);
+            assert_eq!(streamed.finish(), Some(expected), "count={count}");
+        }
+    }
+
+    #[test]
+    fn streaming_root_rejects_empty_stream() {
+        assert_eq!(StreamingRoot::new().finish(), None);
     }
 }

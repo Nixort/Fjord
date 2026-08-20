@@ -25,9 +25,8 @@
 //! it proves the image is well-formed and its contents match the sealed root.
 
 use crate::format::Cask;
-use crate::merkle::{self, MerkleTree, ProofStep};
+use crate::merkle::{self, MerkleTree, ProofStep, StreamingRoot};
 use crate::CaskError;
-use alloc::vec::Vec;
 
 /// Parses `image` and verifies its contents against the sealed Merkle root.
 ///
@@ -41,16 +40,20 @@ pub fn open_and_verify(image: &[u8]) -> Result<Cask<'_>, CaskError> {
     Ok(cask)
 }
 
-/// Rebuilds the Merkle tree over all body pages and compares it to the header
+/// Streams the Merkle root over all body pages and compares it to the header
 /// root, returning [`CaskError::IntegrityFailed`] on any mismatch.
+///
+/// Unlike the build-side [`MerkleTree`], this eager verifier keeps only one hash
+/// per populated tree height. Its memory is therefore `O(log page_count)` rather
+/// than `O(page_count)`, while preserving Cask's exact odd-leaf promotion rule.
 pub fn verify_integrity(cask: &Cask<'_>) -> Result<(), CaskError> {
     let count = cask.page_count();
-    let mut pages: Vec<&[u8]> = Vec::with_capacity(count as usize);
+    let mut root = StreamingRoot::new();
     for i in 0..count {
-        pages.push(cask.page(i).ok_or(CaskError::Malformed)?);
+        root.push_page(cask.page(i).ok_or(CaskError::Malformed)?);
     }
-    let tree = MerkleTree::build(&pages).ok_or(CaskError::Malformed)?;
-    if merkle::eq(&tree.root(), cask.merkle_root()) {
+    let root = root.finish().ok_or(CaskError::Malformed)?;
+    if merkle::eq(&root, cask.merkle_root()) {
         Ok(())
     } else {
         Err(CaskError::IntegrityFailed)
